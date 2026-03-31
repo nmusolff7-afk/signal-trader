@@ -1,0 +1,30 @@
+# Secrets — never commit
+.env
+
+# Database — Railway uses its own volume
+apex.db
+apex_feedback.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Excel / PDFs — large, not needed in deploy
+*.xlsx
+*.pdf
+
+# Debug scripts
+read_excel.py
+read_excel_debug.py
+build_taxonomy_json.py

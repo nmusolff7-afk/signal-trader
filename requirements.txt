@@ -1,0 +1,13 @@
+# APEX Signal Trader — all dependencies
+
+# Data ingestion
+aiohttp==3.9.5
+feedparser==6.0.11
+
+# Dashboard / API server
+fastapi
+uvicorn[standard]
+pydantic
+
+# Env file loading
+python-dotenv
