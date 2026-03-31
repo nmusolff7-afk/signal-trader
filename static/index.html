@@ -1,850 +1,379 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>APEX SIGNAL TRADER</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700;900&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg:        #060809;
-    --bg2:       #0c1015;
-    --bg3:       #111820;
-    --border:    #1e2d3d;
-    --accent:    #00c9ff;
-    --accent2:   #ff6b35;
-    --green:     #00ff88;
-    --red:       #ff3355;
-    --yellow:    #ffd700;
-    --dim:       #3a5068;
-    --text:      #c8d8e8;
-    --text-dim:  #4a6278;
-    --mono:      'Share Tech Mono', monospace;
-    --sans:      'Barlow Condensed', sans-serif;
-  }
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--mono);
-    font-size: 13px;
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
-
-  /* Scanline overlay */
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(0,0,0,0.08) 2px,
-      rgba(0,0,0,0.08) 4px
-    );
-    pointer-events: none;
-    z-index: 1000;
-  }
-
-  /* ── Header ── */
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 24px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg2);
-    position: sticky;
-    top: 0;
-    z-index: 100;
-  }
-
-  .logo {
-    font-family: var(--sans);
-    font-weight: 900;
-    font-size: 28px;
-    letter-spacing: 6px;
-    color: var(--accent);
-    text-shadow: 0 0 20px rgba(0,201,255,0.4);
-  }
-
-  .logo span { color: var(--accent2); }
-
-  .header-meta {
-    display: flex;
-    align-items: center;
-    gap: 24px;
-    font-size: 11px;
-    color: var(--text-dim);
-    letter-spacing: 1px;
-  }
-
-  .pulse {
-    display: inline-block;
-    width: 7px; height: 7px;
-    background: var(--green);
-    border-radius: 50%;
-    box-shadow: 0 0 8px var(--green);
-    animation: pulse 1.4s ease-in-out infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50%       { opacity: 0.4; transform: scale(0.8); }
-  }
-
-  /* ── Layout ── */
-  .grid {
-    display: grid;
-    grid-template-columns: 300px 1fr 280px;
-    grid-template-rows: auto auto 1fr;
-    gap: 1px;
-    background: var(--border);
-    min-height: calc(100vh - 57px);
-  }
-
-  .panel {
-    background: var(--bg);
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .panel-header {
-    padding: 10px 16px;
-    background: var(--bg2);
-    border-bottom: 1px solid var(--border);
-    font-family: var(--sans);
-    font-weight: 700;
-    font-size: 11px;
-    letter-spacing: 3px;
-    color: var(--text-dim);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .panel-header .count {
-    font-family: var(--mono);
-    font-size: 10px;
-    color: var(--accent);
-    letter-spacing: 0;
-  }
-
-  .panel-body {
-    padding: 12px 16px;
-    flex: 1;
-    overflow-y: auto;
-  }
-
-  /* ── Scrollbar ── */
-  ::-webkit-scrollbar { width: 3px; }
-  ::-webkit-scrollbar-track { background: var(--bg); }
-  ::-webkit-scrollbar-thumb { background: var(--border); }
-
-  /* ── Phase tracker ── */
-  .phase-list { display: flex; flex-direction: column; gap: 2px; }
-
-  .phase-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 7px 10px;
-    border: 1px solid transparent;
-    border-radius: 2px;
-    transition: all 0.15s;
-    cursor: default;
-  }
-
-  .phase-item.active {
-    border-color: var(--accent);
-    background: rgba(0,201,255,0.04);
-  }
-
-  .phase-item.complete {
-    border-color: var(--green);
-    background: rgba(0,255,136,0.03);
-  }
-
-  .phase-num {
-    font-size: 10px;
-    color: var(--text-dim);
-    width: 16px;
-    flex-shrink: 0;
-  }
-
-  .phase-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    border: 1px solid var(--dim);
-    background: transparent;
-  }
-
-  .phase-item.active .phase-dot {
-    background: var(--accent);
-    border-color: var(--accent);
-    box-shadow: 0 0 6px var(--accent);
-  }
-
-  .phase-item.complete .phase-dot {
-    background: var(--green);
-    border-color: var(--green);
-  }
-
-  .phase-name {
-    font-size: 11px;
-    color: var(--text-dim);
-    line-height: 1.3;
-    flex: 1;
-  }
-
-  .phase-item.active .phase-name { color: var(--text); }
-  .phase-item.complete .phase-name { color: var(--green); }
-
-  .phase-badge {
-    font-size: 9px;
-    padding: 1px 5px;
-    border-radius: 2px;
-    letter-spacing: 1px;
-    flex-shrink: 0;
-  }
-
-  .badge-critical { background: rgba(255,51,85,0.15); color: var(--red); }
-  .badge-high     { background: rgba(255,107,53,0.15); color: var(--accent2); }
-  .badge-medium   { background: rgba(0,201,255,0.1);  color: var(--accent); }
-  .badge-low      { background: rgba(58,80,104,0.3);  color: var(--dim); }
-
-  /* ── Stats bar ── */
-  .stats-bar {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 1px;
-    background: var(--border);
-    grid-column: 1 / -1;
-  }
-
-  .stat-box {
-    background: var(--bg2);
-    padding: 14px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .stat-label {
-    font-size: 9px;
-    letter-spacing: 2px;
-    color: var(--text-dim);
-    font-family: var(--sans);
-    font-weight: 600;
-  }
-
-  .stat-value {
-    font-size: 28px;
-    font-family: var(--sans);
-    font-weight: 900;
-    color: var(--text);
-    line-height: 1;
-  }
-
-  .stat-value.accent  { color: var(--accent); text-shadow: 0 0 20px rgba(0,201,255,0.3); }
-  .stat-value.green   { color: var(--green);  text-shadow: 0 0 20px rgba(0,255,136,0.3); }
-  .stat-value.orange  { color: var(--accent2);}
-
-  .stat-sub { font-size: 10px; color: var(--text-dim); }
-
-  /* ── Event feed ── */
-  .event-list { display: flex; flex-direction: column; gap: 2px; }
-
-  .event-row {
-    display: grid;
-    grid-template-columns: 68px 110px 52px 1fr 50px;
-    gap: 8px;
-    align-items: center;
-    padding: 6px 8px;
-    border-left: 2px solid transparent;
-    font-size: 11px;
-    animation: fadeIn 0.3s ease;
-  }
-
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateX(-4px); }
-    to   { opacity: 1; transform: translateX(0); }
-  }
-
-  .event-row.tradeable { border-left-color: var(--green); background: rgba(0,255,136,0.03); }
-  .event-row.classified { border-left-color: var(--accent); }
-  .event-row:hover { background: var(--bg3); }
-
-  .ev-time { color: var(--text-dim); font-size: 10px; }
-  .ev-source { color: var(--accent); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ev-id { color: var(--yellow); font-size: 10px; font-weight: bold; }
-  .ev-text { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ev-conf { text-align: right; }
-  .ev-conf.high { color: var(--green); }
-  .ev-conf.mid  { color: var(--yellow); }
-  .ev-conf.low  { color: var(--text-dim); }
-
-  .event-header {
-    display: grid;
-    grid-template-columns: 68px 110px 52px 1fr 50px;
-    gap: 8px;
-    padding: 4px 8px 8px;
-    font-size: 9px;
-    letter-spacing: 1px;
-    color: var(--text-dim);
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 4px;
-    font-family: var(--sans);
-    font-weight: 600;
-  }
-
-  /* ── API Keys ── */
-  .key-list { display: flex; flex-direction: column; gap: 6px; }
-
-  .key-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    gap: 8px;
-  }
-
-  .key-row.set { border-color: rgba(0,255,136,0.2); }
-
-  .key-info { flex: 1; min-width: 0; }
-  .key-name { font-size: 10px; color: var(--accent); }
-  .key-status { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
-  .key-row.set .key-status { color: var(--green); }
-
-  .key-indicator {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    border: 1px solid var(--dim);
-    flex-shrink: 0;
-  }
-  .key-row.set .key-indicator { background: var(--green); border-color: var(--green); }
-
-  .key-btn {
-    background: var(--bg3);
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    padding: 3px 8px;
-    font-family: var(--mono);
-    font-size: 10px;
-    cursor: pointer;
-    border-radius: 2px;
-    transition: all 0.15s;
-    white-space: nowrap;
-  }
-  .key-btn:hover { border-color: var(--accent); color: var(--accent); }
-
-  /* ── Key modal ── */
-  .modal-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.8);
-    z-index: 500;
-    align-items: center;
-    justify-content: center;
-  }
-  .modal-overlay.open { display: flex; }
-
-  .modal {
-    background: var(--bg2);
-    border: 1px solid var(--accent);
-    padding: 24px;
-    width: 400px;
-    box-shadow: 0 0 40px rgba(0,201,255,0.1);
-  }
-
-  .modal h3 {
-    font-family: var(--sans);
-    font-weight: 700;
-    letter-spacing: 3px;
-    font-size: 13px;
-    color: var(--accent);
-    margin-bottom: 16px;
-  }
-
-  .modal p {
-    font-size: 11px;
-    color: var(--text-dim);
-    margin-bottom: 12px;
-    line-height: 1.5;
-  }
-
-  .modal input {
-    width: 100%;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 8px 12px;
-    font-family: var(--mono);
-    font-size: 12px;
-    outline: none;
-    margin-bottom: 16px;
-  }
-  .modal input:focus { border-color: var(--accent); }
-
-  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
-
-  .btn {
-    padding: 6px 16px;
-    font-family: var(--mono);
-    font-size: 11px;
-    cursor: pointer;
-    border-radius: 2px;
-    border: 1px solid;
-    transition: all 0.15s;
-  }
-
-  .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: bold; }
-  .btn-primary:hover { box-shadow: 0 0 12px rgba(0,201,255,0.4); }
-  .btn-cancel { background: transparent; border-color: var(--border); color: var(--text-dim); }
-  .btn-cancel:hover { border-color: var(--text-dim); color: var(--text); }
-
-  /* ── Source health ── */
-  .source-list { display: flex; flex-direction: column; gap: 4px; }
-
-  .source-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 6px 8px;
-    border: 1px solid var(--border);
-    border-radius: 2px;
-  }
-
-  .source-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .source-dot.live   { background: var(--green); box-shadow: 0 0 6px var(--green); }
-  .source-dot.dead   { background: var(--red); }
-  .source-dot.never  { background: var(--dim); }
-
-  .source-name { flex: 1; font-size: 11px; color: var(--text); }
-  .source-count { font-size: 10px; color: var(--text-dim); }
-  .source-time  { font-size: 9px; color: var(--text-dim); }
-
-  /* ── Taxonomy progress ── */
-  .taxonomy-bar-wrap {
-    margin: 8px 0;
-    background: var(--bg3);
-    height: 6px;
-    border-radius: 3px;
-    overflow: hidden;
-  }
-  .taxonomy-bar {
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent), var(--green));
-    border-radius: 3px;
-    transition: width 0.5s ease;
-  }
-
-  .taxonomy-meta {
-    display: flex;
-    justify-content: space-between;
-    font-size: 10px;
-    color: var(--text-dim);
-    margin-top: 4px;
-  }
-
-  /* ── Trade log ── */
-  .trade-list { display: flex; flex-direction: column; gap: 2px; }
-
-  .trade-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 8px;
-    border-left: 2px solid var(--border);
-    font-size: 11px;
-  }
-
-  .trade-row.long  { border-left-color: var(--green); }
-  .trade-row.short { border-left-color: var(--red); }
-
-  .trade-dir {
-    font-family: var(--sans);
-    font-weight: 900;
-    font-size: 11px;
-    width: 40px;
-  }
-  .trade-dir.long  { color: var(--green); }
-  .trade-dir.short { color: var(--red); }
-
-  .empty-state {
-    color: var(--text-dim);
-    font-size: 11px;
-    padding: 20px 0;
-    text-align: center;
-    letter-spacing: 1px;
-  }
-
-  /* ── Responsive ── */
-  @media (max-width: 1100px) {
-    .grid { grid-template-columns: 260px 1fr; }
-    .grid > .panel:last-child { grid-column: 1 / -1; }
-  }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>APEX SIGNAL TRADER - LIVE</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    :root {
+      --bg: #0a0e12;
+      --bg2: #0f141a;
+      --bg3: #151d27;
+      --border: #1e2d3d;
+      --accent: #00d4ff;
+      --green: #00ff88;
+      --red: #ff3355;
+      --orange: #ff6b35;
+      --yellow: #ffd700;
+      --dim: #3a5068;
+      --text: #e8f4f8;
+      --text-dim: #6a8a9a;
+      --mono: 'Courier New', monospace;
+      --sans: 'Segoe UI', Tahoma, Geneva, sans-serif;
+    }
+    
+    html, body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      height: 100%;
+      overflow: hidden;
+    }
+    
+    header {
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .logo {
+      font-size: 24px;
+      font-weight: bold;
+      letter-spacing: 2px;
+      color: var(--accent);
+      font-family: var(--sans);
+    }
+    
+    .logo span { color: var(--orange); }
+    
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+    }
+    
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 10px var(--green);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.8); }
+    }
+    
+    .container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      height: calc(100vh - 57px);
+      background: var(--border);
+      overflow: hidden;
+    }
+    
+    .panel {
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      overflow: hidden;
+    }
+    
+    .panel-header {
+      background: var(--bg2);
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: bold;
+      letter-spacing: 2px;
+      color: var(--text-dim);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .panel-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+    
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    
+    .stat-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      padding: 12px;
+      border-radius: 4px;
+    }
+    
+    .stat-label {
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+      margin-bottom: 4px;
+    }
+    
+    .stat-value {
+      font-size: 24px;
+      font-weight: bold;
+      color: var(--accent);
+      font-family: var(--sans);
+    }
+    
+    .stat-value.green { color: var(--green); }
+    .stat-value.orange { color: var(--orange); }
+    .stat-value.red { color: var(--red); }
+    
+    .source-item {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      margin-bottom: 6px;
+      border-radius: 3px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .source-name {
+      flex: 1;
+      color: var(--text);
+      font-size: 12px;
+    }
+    
+    .source-count {
+      color: var(--accent);
+      font-weight: bold;
+      margin-right: 12px;
+    }
+    
+    .source-status {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    
+    .source-status.waiting { background: var(--dim); }
+    .source-status.error { background: var(--red); }
+    
+    .event-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    .event-item {
+      background: var(--bg2);
+      border-left: 3px solid var(--border);
+      padding: 8px 12px;
+      border-radius: 2px;
+      font-size: 11px;
+      animation: slideIn 0.3s ease;
+    }
+    
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .event-item.classified {
+      border-left-color: var(--accent);
+      background: rgba(0, 212, 255, 0.05);
+    }
+    
+    .event-item.tradeable {
+      border-left-color: var(--green);
+      background: rgba(0, 255, 136, 0.05);
+    }
+    
+    .event-time {
+      color: var(--text-dim);
+      font-size: 10px;
+      margin-bottom: 2px;
+    }
+    
+    .event-source {
+      color: var(--orange);
+      font-weight: bold;
+      margin-right: 8px;
+    }
+    
+    .event-id {
+      color: var(--yellow);
+      font-weight: bold;
+      margin-right: 8px;
+    }
+    
+    .event-conf {
+      color: var(--text-dim);
+      float: right;
+    }
+    
+    .event-text {
+      color: var(--text-dim);
+      font-size: 10px;
+      margin-top: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    
+    ::-webkit-scrollbar-track {
+      background: var(--bg);
+    }
+    
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--dim);
+    }
+  </style>
 </head>
 <body>
 
 <header>
-  <div class="logo">APEX<span>·</span>SIG</div>
-  <div class="header-meta">
-    <span><span class="pulse"></span>&nbsp; LIVE</span>
-    <span id="server-time">--:--:-- UTC</span>
-    <span id="db-status">DB: CONNECTING</span>
+  <div class="logo">APEX <span>SIGNAL</span> TRADER</div>
+  <div class="status-indicator">
+    <div class="pulse"></div>
+    <span>PHASE 2 - WEEK 1 - LIVE</span>
   </div>
 </header>
 
-<!-- Stats bar -->
-<div class="stats-bar">
-  <div class="stat-box">
-    <div class="stat-label">CURRENT PHASE</div>
-    <div class="stat-value accent" id="stat-phase">--</div>
-    <div class="stat-sub" id="stat-phase-name">Loading...</div>
-  </div>
-  <div class="stat-box">
-    <div class="stat-label">EVENTS INGESTED</div>
-    <div class="stat-value green" id="stat-events">--</div>
-    <div class="stat-sub">total raw events</div>
-  </div>
-  <div class="stat-box">
-    <div class="stat-label">TAXONOMY PROGRESS</div>
-    <div class="stat-value orange" id="stat-taxonomy">--</div>
-    <div class="stat-sub">of 1,000 target</div>
-  </div>
-  <div class="stat-box">
-    <div class="stat-label">PAPER TRADES</div>
-    <div class="stat-value" id="stat-trades">--</div>
-    <div class="stat-sub">signals detected</div>
-  </div>
-</div>
-
-<div class="grid">
-
-  <!-- LEFT: Phase tracker + Sources + Keys -->
-  <div class="panel" style="grid-row: 2 / 4;">
-
-    <div class="panel-header">PHASE TRACKER</div>
-    <div class="panel-body" style="flex: 0; padding-bottom: 0;">
-      <div class="phase-list" id="phase-list"></div>
-    </div>
-
-    <div class="panel-header" style="margin-top: 1px;">SOURCE HEALTH</div>
-    <div class="panel-body" style="flex: 0; padding-bottom: 0;">
-      <div class="source-list" id="source-list">
-        <div class="empty-state">waiting for data...</div>
-      </div>
-    </div>
-
-    <div class="panel-header" style="margin-top: 1px;">
-      TAXONOMY
-      <span class="count" id="taxonomy-pct">0%</span>
-    </div>
-    <div class="panel-body" style="flex: 0;">
-      <div class="taxonomy-bar-wrap">
-        <div class="taxonomy-bar" id="taxonomy-bar" style="width: 0%"></div>
-      </div>
-      <div class="taxonomy-meta">
-        <span id="taxonomy-count">0 events defined</span>
-        <span>target: 1,000</span>
-      </div>
-    </div>
-
-  </div>
-
-  <!-- CENTER: Event feed -->
-  <div class="panel" style="grid-row: 2 / 4;">
-    <div class="panel-header">
-      LIVE EVENT FEED
-      <span class="count" id="event-count">0 events</span>
-    </div>
+<div class="container">
+  <!-- LEFT PANEL: Stats & Sources -->
+  <div class="panel">
+    <div class="panel-header">SYSTEM STATUS</div>
     <div class="panel-body">
-      <div class="event-header">
-        <span>TIME</span>
-        <span>SOURCE</span>
-        <span>EVENT</span>
-        <span>TEXT</span>
-        <span>CONF</span>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total Events</div>
+          <div class="stat-value" id="total-events">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Classified</div>
+          <div class="stat-value green" id="classified-events">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Tradeable</div>
+          <div class="stat-value orange" id="tradeable-events">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Trades Logged</div>
+          <div class="stat-value" id="trade-count">0</div>
+        </div>
       </div>
-      <div class="event-list" id="event-list">
-        <div class="empty-state">no events yet — run main.py to start ingestion</div>
-      </div>
+      
+      <div class="panel-header" style="margin-top: 16px; margin-left: -12px; margin-right: -12px; width: auto; margin-bottom: 8px;">SOURCE HEALTH</div>
+      <div id="sources-list"></div>
     </div>
   </div>
-
-  <!-- RIGHT: API Keys + Trades -->
-  <div class="panel" style="grid-row: 2 / 4;">
-
-    <div class="panel-header">API KEYS</div>
-    <div class="panel-body" style="flex: 0; padding-bottom: 8px;">
-      <div class="key-list" id="key-list">
-        <div class="empty-state">loading...</div>
-      </div>
-    </div>
-
-    <div class="panel-header" style="margin-top: 1px;">
-      PAPER TRADE LOG
-      <span class="count" id="trade-count">0</span>
-    </div>
+  
+  <!-- RIGHT PANEL: Live Events -->
+  <div class="panel">
+    <div class="panel-header">LIVE EVENT FEED</div>
     <div class="panel-body">
-      <div class="trade-list" id="trade-list">
-        <div class="empty-state">no trades yet</div>
-      </div>
-    </div>
-
-  </div>
-
-</div>
-
-<!-- Key input modal -->
-<div class="modal-overlay" id="modal">
-  <div class="modal">
-    <h3>SET API KEY</h3>
-    <p id="modal-desc">Enter your API key. It will be stored in the Railway environment for this service.</p>
-    <input type="password" id="modal-input" placeholder="paste key here...">
-    <div class="modal-actions">
-      <button class="btn btn-cancel" onclick="closeModal()">CANCEL</button>
-      <button class="btn btn-primary" onclick="submitKey()">SAVE KEY</button>
+      <div class="event-list" id="events-list"></div>
     </div>
   </div>
 </div>
 
 <script>
-const PHASES = [
-  {id:0,name:"Infrastructure Setup",       priority:"CRITICAL"},
-  {id:1,name:"Event Taxonomy (No Code)",   priority:"CRITICAL"},
-  {id:2,name:"Signal Ingestion Layer",     priority:"HIGH"},
-  {id:3,name:"Classifier Training Data",   priority:"HIGH"},
-  {id:4,name:"Classifier Model Build",     priority:"HIGH"},
-  {id:5,name:"Execution Engine",           priority:"HIGH"},
-  {id:6,name:"Paper Trading",              priority:"MEDIUM"},
-  {id:7,name:"Feedback Loop",              priority:"MEDIUM"},
-  {id:8,name:"Live Trading — Micro",       priority:"MEDIUM"},
-  {id:9,name:"Full Deployment + Scale",    priority:"LOW"},
-];
-
-let currentPhase = 0;
-let modalKey = null;
-
-// ── Render phases ─────────────────────────────────────
-function renderPhases(current) {
-  const el = document.getElementById('phase-list');
-  el.innerHTML = PHASES.map(p => {
-    const cls = p.id < current ? 'complete' : p.id === current ? 'active' : '';
-    const badge = `<span class="phase-badge badge-${p.priority.toLowerCase()}">${p.priority}</span>`;
-    return `
-      <div class="phase-item ${cls}">
-        <span class="phase-num">${p.id}</span>
-        <span class="phase-dot"></span>
-        <span class="phase-name">${p.name}</span>
-        ${badge}
-      </div>`;
-  }).join('');
-}
-
-// ── Render sources ────────────────────────────────────
-function renderSources(sources) {
-  const el = document.getElementById('source-list');
-  if (!sources || sources.length === 0) {
-    el.innerHTML = '<div class="empty-state">no sources active</div>';
-    return;
+  const API_BASE = '/api';
+  
+  async function updateStatus() {
+    try {
+      const resp = await fetch(`${API_BASE}/status`);
+      const data = await resp.json();
+      
+      // Update stats
+      document.getElementById('total-events').textContent = data.event_count || 0;
+      document.getElementById('classified-events').textContent = (data.event_count - (data.unclassified_count || 0)) || 0;
+      document.getElementById('tradeable-events').textContent = data.tradeable_count || 0;
+      document.getElementById('trade-count').textContent = data.trade_count || 0;
+      
+      // Update sources
+      const sourcesList = document.getElementById('sources-list');
+      if (data.source_health && data.source_health.length > 0) {
+        sourcesList.innerHTML = data.source_health.map(s => `
+          <div class="source-item">
+            <div class="source-name">${s.source}</div>
+            <div class="source-count">${s.total || 0}</div>
+            <div class="source-status ${s.status === 'live' ? 'live' : 'waiting'}"></div>
+          </div>
+        `).join('');
+      } else {
+        sourcesList.innerHTML = '<div style="color: var(--text-dim); padding: 8px; text-align: center;">No sources active</div>';
+      }
+    } catch (e) {
+      console.error('Status fetch failed:', e);
+    }
   }
-  el.innerHTML = sources.map(s => {
-    const t = s.last_seen ? s.last_seen.split('T')[1]?.slice(0,8) : '—';
-    return `
-      <div class="source-row">
-        <div class="source-dot ${s.status}"></div>
-        <div class="source-name">${s.source}</div>
-        <div class="source-count">${s.total}</div>
-        <div class="source-time">${t}</div>
-      </div>`;
-  }).join('');
-}
-
-// ── Render events ─────────────────────────────────────
-function renderEvents(events) {
-  const el = document.getElementById('event-list');
-  document.getElementById('event-count').textContent = events.length + ' events';
-  if (!events.length) {
-    el.innerHTML = '<div class="empty-state">no events yet — run main.py</div>';
-    return;
+  
+  async function updateEvents() {
+    try {
+      const resp = await fetch(`${API_BASE}/events?limit=50`);
+      const data = await resp.json();
+      
+      const eventsList = document.getElementById('events-list');
+      if (!data.events || data.events.length === 0) {
+        eventsList.innerHTML = '<div style="color: var(--text-dim); padding: 16px; text-align: center;">Waiting for events...</div>';
+        return;
+      }
+      
+      eventsList.innerHTML = data.events.map(e => {
+        const time = new Date(e.ts).toLocaleTimeString();
+        const classified = e.event_id && e.event_id !== 'NO_EVENT';
+        const tradeable = e.tradeable;
+        const className = tradeable ? 'tradeable' : (classified ? 'classified' : '');
+        
+        return `
+          <div class="event-item ${className}">
+            <div class="event-time">${time}</div>
+            <div>
+              <span class="event-source">${e.source}</span>
+              ${classified ? `<span class="event-id">${e.event_id}</span><span class="event-conf">${(e.confidence || 0).toFixed(2)}</span>` : ''}
+            </div>
+            <div class="event-text">${e.raw_text.substring(0, 100)}...</div>
+          </div>
+        `;
+      }).join('');
+    } catch (e) {
+      console.error('Events fetch failed:', e);
+    }
   }
-  el.innerHTML = events.map(e => {
-    const time = e.ts ? e.ts.split('T')[1]?.slice(0,8) : '—';
-    const eid  = e.event_id || '—';
-    const conf = e.confidence || 0;
-    const confClass = conf >= 0.8 ? 'high' : conf >= 0.6 ? 'mid' : 'low';
-    const confStr   = conf > 0 ? conf.toFixed(2) : '—';
-    const rowClass  = e.tradeable ? 'tradeable' : eid !== '—' ? 'classified' : '';
-    const text = (e.raw_text || '').slice(0, 80);
-    const src  = (e.source || '').slice(0, 14);
-    return `
-      <div class="event-row ${rowClass}">
-        <span class="ev-time">${time}</span>
-        <span class="ev-source">${src}</span>
-        <span class="ev-id">${eid}</span>
-        <span class="ev-text">${text}</span>
-        <span class="ev-conf ${confClass}">${confStr}</span>
-      </div>`;
-  }).join('');
-}
-
-// ── Render trades ─────────────────────────────────────
-function renderTrades(trades) {
-  const el = document.getElementById('trade-list');
-  document.getElementById('trade-count').textContent = trades.length;
-  document.getElementById('stat-trades').textContent = trades.length;
-  if (!trades.length) {
-    el.innerHTML = '<div class="empty-state">no signals detected yet</div>';
-    return;
-  }
-  el.innerHTML = trades.map(t => {
-    const time = t.ts ? t.ts.split('T')[1]?.slice(0,8) : '—';
-    const dir = (t.direction || '').toUpperCase();
-    return `
-      <div class="trade-row ${dir.toLowerCase()}">
-        <span class="trade-dir ${dir.toLowerCase()}">${dir}</span>
-        <span style="color:var(--accent);font-size:10px">${t.event_id}</span>
-        <span style="color:var(--text);font-size:10px;flex:1">${t.asset}</span>
-        <span style="color:var(--text-dim);font-size:9px">${time}</span>
-        <span style="font-size:9px;color:var(--text-dim)">${t.venue}</span>
-      </div>`;
-  }).join('');
-}
-
-// ── Render API keys ───────────────────────────────────
-function renderKeys(keys) {
-  const el = document.getElementById('key-list');
-  el.innerHTML = keys.map(k => `
-    <div class="key-row ${k.set ? 'set' : ''}">
-      <div class="key-indicator"></div>
-      <div class="key-info">
-        <div class="key-name">${k.name}</div>
-        <div class="key-status">${k.set ? '✓ ' + k.preview : k.required ? 'REQUIRED — not set' : 'optional'}</div>
-      </div>
-      <button class="key-btn" onclick="openModal('${k.name}','${k.label}')">
-        ${k.set ? 'UPDATE' : 'SET'}
-      </button>
-    </div>`).join('');
-}
-
-// ── Modal ─────────────────────────────────────────────
-function openModal(name, label) {
-  modalKey = name;
-  document.getElementById('modal-desc').textContent =
-    `Enter your ${label} key. For permanent storage, also paste it into Railway → Variables.`;
-  document.getElementById('modal-input').value = '';
-  document.getElementById('modal').classList.add('open');
-  document.getElementById('modal-input').focus();
-}
-
-function closeModal() {
-  document.getElementById('modal').classList.remove('open');
-  modalKey = null;
-}
-
-async function submitKey() {
-  const val = document.getElementById('modal-input').value.trim();
-  if (!val || !modalKey) return;
-  try {
-    await fetch('/api/keys', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({name: modalKey, value: val})
-    });
-    closeModal();
-    loadKeys();
-  } catch(e) { alert('Failed to save key: ' + e); }
-}
-
-document.getElementById('modal-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') submitKey();
-  if (e.key === 'Escape') closeModal();
-});
-
-// ── Fetch loops ───────────────────────────────────────
-async function loadStatus() {
-  try {
-    const r = await fetch('/api/status');
-    const d = await r.json();
-    currentPhase = d.current_phase;
-    renderPhases(currentPhase);
-    renderSources(d.source_health);
-
-    document.getElementById('stat-phase').textContent = d.current_phase;
-    document.getElementById('stat-phase-name').textContent =
-      PHASES[d.current_phase]?.name || '';
-    document.getElementById('stat-events').textContent =
-      d.event_count.toLocaleString();
-    document.getElementById('db-status').textContent =
-      d.db_live ? 'DB: LIVE' : 'DB: OFFLINE';
-
-    const pct = Math.min(100, (d.taxonomy_event_count / d.taxonomy_target) * 100);
-    document.getElementById('taxonomy-bar').style.width = pct + '%';
-    document.getElementById('taxonomy-count').textContent =
-      d.taxonomy_event_count + ' events defined';
-    document.getElementById('taxonomy-pct').textContent =
-      pct.toFixed(1) + '%';
-    document.getElementById('stat-taxonomy').textContent =
-      d.taxonomy_event_count;
-
-    const t = d.server_time ? d.server_time.split('T')[1]?.slice(0,8) + ' UTC' : '';
-    document.getElementById('server-time').textContent = t;
-  } catch(e) { document.getElementById('db-status').textContent = 'DB: OFFLINE'; }
-}
-
-async function loadEvents() {
-  try {
-    const r = await fetch('/api/events?limit=80');
-    const d = await r.json();
-    renderEvents(d.events || []);
-  } catch(e) {}
-}
-
-async function loadTrades() {
-  try {
-    const r = await fetch('/api/trades?limit=50');
-    const d = await r.json();
-    renderTrades(d.trades || []);
-  } catch(e) {}
-}
-
-async function loadKeys() {
-  try {
-    const r = await fetch('/api/keys');
-    const d = await r.json();
-    renderKeys(d.keys || []);
-  } catch(e) {}
-}
-
-// ── Init ──────────────────────────────────────────────
-renderPhases(0);
-
-loadStatus();
-loadEvents();
-loadTrades();
-loadKeys();
-
-setInterval(loadStatus, 5000);
-setInterval(loadEvents, 3000);
-setInterval(loadTrades, 5000);
-setInterval(loadKeys,   15000);
+  
+  // Update every 1 second
+  setInterval(updateStatus, 1000);
+  setInterval(updateEvents, 1000);
+  
+  // Initial load
+  updateStatus();
+  updateEvents();
 </script>
+
 </body>
 </html>

@@ -83,6 +83,8 @@ def get_status():
     db_live = conn is not None
 
     event_count = 0
+    classified_count = 0
+    tradeable_count = 0
     trade_count = 0
     source_health = []
     taxonomy_count = 0
@@ -90,12 +92,15 @@ def get_status():
     if db_live:
         try:
             event_count = conn.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]
+            classified_count = conn.execute("SELECT COUNT(*) FROM raw_events WHERE event_id IS NOT NULL AND event_id != 'NO_EVENT'").fetchone()[0]
+            tradeable_count = conn.execute("SELECT COUNT(*) FROM raw_events WHERE tradeable = 1").fetchone()[0]
             trade_count = conn.execute("SELECT COUNT(*) FROM trade_log").fetchone()[0]
 
             # Last seen time per source
             rows = conn.execute("""
                 SELECT source, MAX(ts) as last_seen, COUNT(*) as total
                 FROM raw_events GROUP BY source
+                ORDER BY COUNT(*) DESC
             """).fetchall()
             for r in rows:
                 last = r["last_seen"]
@@ -105,21 +110,24 @@ def get_status():
                     "total": r["total"],
                     "status": "live" if last else "never",
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Status error: {e}")
         finally:
             conn.close()
 
     # Determine current phase based on what exists
     current_phase = 0
     if db_live and event_count > 0:
-        current_phase = 1   # Infrastructure done, taxonomy in progress
+        current_phase = 2   # Phase 2: Signal Ingestion
 
     return {
         "current_phase": current_phase,
         "phases": PHASES,
         "db_live": db_live,
         "event_count": event_count,
+        "classified_count": classified_count,
+        "unclassified_count": event_count - classified_count,
+        "tradeable_count": tradeable_count,
         "trade_count": trade_count,
         "source_health": source_health,
         "taxonomy_event_count": 90,   # Update manually as taxonomy grows
