@@ -826,6 +826,100 @@ class BinanceFundingRateSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# BYBIT PERPETUALS FUNDING RATE SOURCE
+# Real-time: 5 second polling
+# ═══════════════════════════════════════════════════════
+
+class BybitFundingRateSource(BaseSource):
+    """Bybit perpetuals funding rates"""
+    name = "Bybit Funding"
+    interval_seconds = 5.0
+    
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._last_funding_rate = {}
+    
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                symbols = ["BTCUSDT", "ETHUSDT"]
+                
+                for symbol in symbols:
+                    url = f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={symbol}&limit=1"
+                    
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        if resp.status != 200:
+                            continue
+                        
+                        data = await resp.json()
+                        if not data.get("result", {}).get("list"):
+                            continue
+                        
+                        latest = data["result"]["list"][0]
+                        funding_rate = float(latest.get("fundingRate", 0))
+                        
+                        rate_key = f"{symbol}_{funding_rate:.6f}"
+                        if self._already_seen(rate_key):
+                            continue
+                        
+                        await self.emit({
+                            "text": f"Bybit {symbol}: Funding {funding_rate*100:.4f}%",
+                            "symbol": symbol,
+                            "funding_rate": funding_rate,
+                            "extra_json": json.dumps({"symbol": symbol, "funding_rate": funding_rate})
+                        })
+        except Exception as e:
+            log.warning("[Bybit Funding] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# OKX PERPETUALS FUNDING RATE SOURCE
+# Real-time: 5 second polling
+# ═══════════════════════════════════════════════════════
+
+class OkxFundingRateSource(BaseSource):
+    """OKX perpetuals funding rates"""
+    name = "OKX Funding"
+    interval_seconds = 5.0
+    
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._last_funding_rate = {}
+    
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
+                
+                for symbol in symbols:
+                    url = f"https://www.okx.com/api/v5/public/funding-rate?instId={symbol}"
+                    
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        if resp.status != 200:
+                            continue
+                        
+                        data = await resp.json()
+                        if not data.get("data"):
+                            continue
+                        
+                        latest = data["data"][0]
+                        funding_rate = float(latest.get("fundingRate", 0))
+                        
+                        rate_key = f"{symbol}_{funding_rate:.6f}"
+                        if self._already_seen(rate_key):
+                            continue
+                        
+                        await self.emit({
+                            "text": f"OKX {symbol}: Funding {funding_rate*100:.4f}%",
+                            "symbol": symbol,
+                            "funding_rate": funding_rate,
+                            "extra_json": json.dumps({"symbol": symbol, "funding_rate": funding_rate})
+                        })
+        except Exception as e:
+            log.warning("[OKX Funding] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -854,7 +948,9 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         SecPressReleaseSource(queue),
         
         # ── Week 2: Real-Time Exchange Data (LIVE NOW) ──
-        BinanceFundingRateSource(queue),  # NEW: 5-second polling, continuous data
+        BinanceFundingRateSource(queue),
+        BybitFundingRateSource(queue),
+        OkxFundingRateSource(queue),
         
         # ── Optional: Requires API Keys ──
         # WhaleAlertSource(queue, api_key=config.get("WHALE_ALERT_KEY", "")),
