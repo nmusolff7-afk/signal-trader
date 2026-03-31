@@ -920,6 +920,45 @@ class OkxFundingRateSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# BLOCKCHAIN.COM WHALE TRANSFERS
+# Real-time: Monitor large BTC transfers
+# ═══════════════════════════════════════════════════════
+
+class BlockchainComSource(BaseSource):
+    """Monitor large BTC transfers in real-time"""
+    name = "Blockchain.com"
+    interval_seconds = 10.0
+    
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = "https://blockchain.info/api/q?command=unconfirmed_txs"
+                
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status != 200:
+                        return
+                    
+                    data = await resp.json()
+                    for tx in data.get("txs", [])[:10]:  # Check top 10
+                        tx_id = tx.get("hash", "")
+                        
+                        if self._already_seen(tx_id):
+                            continue
+                        
+                        value_btc = tx.get("out", [{}])[0].get("value", 0) / 1e8
+                        
+                        if value_btc > 5:  # >5 BTC transfers
+                            await self.emit({
+                                "text": f"Blockchain: Large BTC transfer {value_btc:.2f} BTC (~${value_btc*40000:.0f})",
+                                "value_btc": value_btc,
+                                "tx_hash": tx_id,
+                                "extra_json": json.dumps({"value_btc": value_btc, "tx": tx_id})
+                            })
+        except Exception as e:
+            log.warning("[Blockchain.com] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -951,6 +990,7 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         BinanceFundingRateSource(queue),
         BybitFundingRateSource(queue),
         OkxFundingRateSource(queue),
+        BlockchainComSource(queue),
         
         # ── Optional: Requires API Keys ──
         # WhaleAlertSource(queue, api_key=config.get("WHALE_ALERT_KEY", "")),
