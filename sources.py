@@ -730,6 +730,102 @@ class EcbRssSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# BINANCE PERPETUALS FUNDING RATE SOURCE
+# Endpoint: api.binance.com/fapi/v1/fundingRate
+# Real-time: Continuous updates every 5 seconds
+# Classifier: numeric path → E064–E067 (extreme funding rates, OI)
+# ═══════════════════════════════════════════════════════
+
+class BinanceFundingRateSource(BaseSource):
+    """
+    Polls Binance perpetuals funding rates in real-time.
+    Detects extreme funding conditions that signal over-leveraged positions.
+    
+    FREE API. No key required (public endpoints only).
+    """
+    name = "Binance Funding"
+    interval_seconds = 5.0  # Poll every 5 seconds for live data
+    
+    # Track state to detect changes
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._last_funding_rate = {}  # symbol -> rate
+    
+    async def poll(self) -> None:
+        """
+        Get funding rates for major perpetuals (BTC, ETH, BNB, etc).
+        Detect extreme rates that signal over-leverage.
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Get funding rates for top symbols
+                symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "SOLUSDT"]
+                
+                for symbol in symbols:
+                    url = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}&limit=1"
+                    
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        if resp.status != 200:
+                            continue
+                        
+                        data = await resp.json()
+                        if not data:
+                            continue
+                        
+                        latest = data[0]  # Most recent funding rate
+                        funding_rate = float(latest.get("fundingRate", 0))
+                        timestamp = latest.get("fundingTime", "")
+                        
+                        # Create unique key to avoid re-emitting same rate
+                        rate_key = f"{symbol}_{funding_rate:.6f}"
+                        
+                        if self._already_seen(rate_key):
+                            continue
+                        
+                        # Emit if extreme funding (E065: >0.1%/8hr, E066: <-0.05%/8hr)
+                        if funding_rate > 0.001:  # Extreme positive
+                            await self.emit({
+                                "text": f"Binance {symbol}: Extreme positive funding rate {funding_rate*100:.3f}% (longs over-leveraged)",
+                                "symbol": symbol,
+                                "funding_rate": funding_rate,
+                                "direction": "extreme_positive",
+                                "extra_json": json.dumps({
+                                    "symbol": symbol,
+                                    "funding_rate": funding_rate,
+                                    "type": "extreme_positive"
+                                })
+                            })
+                        elif funding_rate < -0.0005:  # Extreme negative
+                            await self.emit({
+                                "text": f"Binance {symbol}: Extreme negative funding rate {funding_rate*100:.3f}% (shorts over-leveraged)",
+                                "symbol": symbol,
+                                "funding_rate": funding_rate,
+                                "direction": "extreme_negative",
+                                "extra_json": json.dumps({
+                                    "symbol": symbol,
+                                    "funding_rate": funding_rate,
+                                    "type": "extreme_negative"
+                                })
+                            })
+                        else:
+                            # Normal rate, still emit for monitoring
+                            await self.emit({
+                                "text": f"Binance {symbol}: Funding rate {funding_rate*100:.4f}%",
+                                "symbol": symbol,
+                                "funding_rate": funding_rate,
+                                "direction": "normal",
+                                "extra_json": json.dumps({
+                                    "symbol": symbol,
+                                    "funding_rate": funding_rate,
+                                    "type": "normal"
+                                })
+                            })
+        
+        except Exception as e:
+            log.warning("[Binance Funding] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -749,22 +845,20 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
     All other sources use free RSS feeds or public APIs.
     """
     return [
-        # ── Existing sources (Phase 0) ──
+        # ── Week 1: Government Sources ──
         EiaPetroleumSource(queue, api_key=config.get("EIA_API_KEY", "")),
         OpecRssSource(queue),
         FedRssSource(queue),
         EcbRssSource(queue),
-        
-        # ── Priority 1: RSS & Public APIs ──
         FederalRegisterSource(queue),
         SecPressReleaseSource(queue),
         
-        # ── Priority 2: Requires API Keys ──
-        # Uncomment and provide API keys:
-        # FdaMedWatchSource(queue),
-        # EdgarSource(queue),
-        WhaleAlertSource(queue, api_key=config.get("WHALE_ALERT_KEY", "")),
-        CoinglassSource(queue, api_key=config.get("COINGLASS_KEY", "")),
+        # ── Week 2: Real-Time Exchange Data (LIVE NOW) ──
+        BinanceFundingRateSource(queue),  # NEW: 5-second polling, continuous data
+        
+        # ── Optional: Requires API Keys ──
+        # WhaleAlertSource(queue, api_key=config.get("WHALE_ALERT_KEY", "")),
+        # CoinglassSource(queue, api_key=config.get("COINGLASS_KEY", "")),
         
         # ── Placeholder sources (TODO): ──
         # BlsSource(queue),  # Needs web scraping or email polling
