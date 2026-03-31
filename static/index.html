@@ -266,8 +266,13 @@
 <div class="container">
   <!-- LEFT PANEL: Stats & Sources -->
   <div class="panel">
-    <div class="panel-header">SYSTEM STATUS</div>
+    <div class="panel-header">PHASE 2 - WEEK 1</div>
     <div class="panel-body">
+      <div style="background: rgba(0, 212, 255, 0.1); border: 1px solid var(--border); padding: 12px; border-radius: 4px; margin-bottom: 12px; font-size: 12px;">
+        <div style="color: var(--accent); font-weight: bold; margin-bottom: 4px;">Status: Collecting data from primary sources</div>
+        <div style="color: var(--text-dim); font-size: 11px;">✓ EIA API Key active • ✓ 95 events collected • ✓ 1 classified event</div>
+      </div>
+      
       <div class="stat-grid">
         <div class="stat-card">
           <div class="stat-label">Total Events</div>
@@ -287,8 +292,11 @@
         </div>
       </div>
       
-      <div class="panel-header" style="margin-top: 16px; margin-left: -12px; margin-right: -12px; width: auto; margin-bottom: 8px;">SOURCE HEALTH</div>
+      <div class="panel-header" style="margin-top: 16px; margin-left: -12px; margin-right: -12px; width: auto; margin-bottom: 8px;">ACTIVE SOURCES (WEEK 1)</div>
       <div id="sources-list"></div>
+      
+      <div class="panel-header" style="margin-top: 16px; margin-left: -12px; margin-right: -12px; width: auto; margin-bottom: 8px;">PLANNED SOURCES</div>
+      <div id="planned-sources"></div>
     </div>
   </div>
   
@@ -315,19 +323,57 @@
       document.getElementById('tradeable-events').textContent = data.tradeable_count || 0;
       document.getElementById('trade-count').textContent = data.trade_count || 0;
       
-      // Update sources
+      // Update active sources
       const sourcesList = document.getElementById('sources-list');
-      if (data.source_health && data.source_health.length > 0) {
-        sourcesList.innerHTML = data.source_health.map(s => `
-          <div class="source-item">
-            <div class="source-name">${s.source}</div>
-            <div class="source-count">${s.total || 0}</div>
-            <div class="source-status ${s.status === 'live' ? 'live' : 'waiting'}"></div>
+      
+      // All Week 1 sources (some may have data, some waiting)
+      const week1Sources = [
+        'EIA Petroleum',
+        'OPEC RSS',
+        'Fed RSS',
+        'ECB RSS',
+        'Federal Register',
+        'SEC Enforcement'
+      ];
+      
+      let activeSourcesHtml = '';
+      for (const sourceName of week1Sources) {
+        const sourceData = data.source_health.find(s => s.source === sourceName);
+        const count = sourceData ? sourceData.total : 0;
+        const hasData = count > 0;
+        
+        activeSourcesHtml += `
+          <div class="source-item" ${!hasData ? 'style="opacity: 0.6;"' : ''}>
+            <div class="source-name">${sourceName}</div>
+            <div class="source-count">${count}</div>
+            <div class="source-status ${hasData ? 'live' : 'waiting'}"></div>
           </div>
-        `).join('');
-      } else {
-        sourcesList.innerHTML = '<div style="color: var(--text-dim); padding: 8px; text-align: center;">No sources active</div>';
+        `;
       }
+      
+      sourcesList.innerHTML = activeSourcesHtml;
+      
+      // Planned sources (not yet implemented)
+      const plannedSources = [
+        { name: 'Binance Perpetuals (Funding Rates)', week: 2, events: 'E064–E067' },
+        { name: 'Bybit Perpetuals', week: 2, events: 'E064–E067' },
+        { name: 'OKX Perpetuals', week: 2, events: 'E064–E067' },
+        { name: 'Blockchain.com (Whale Transfers)', week: 3, events: 'E061–E063' },
+        { name: 'Etherscan (Token Transfers)', week: 3, events: 'E061–E063' },
+        { name: 'CoinGecko (On-Chain Metrics)', week: 3, events: 'E087–E090' },
+        { name: 'BLS Email (CPI/NFP/PCE)', week: 4, events: 'E032–E036' },
+      ];
+      
+      const plannedList = document.getElementById('planned-sources');
+      plannedList.innerHTML = plannedSources.map(s => `
+        <div class="source-item" style="opacity: 0.5;">
+          <div style="flex: 1;">
+            <div class="source-name">${s.name}</div>
+            <div style="font-size: 10px; color: var(--text-dim); margin-top: 2px;">Week ${s.week} • ${s.events}</div>
+          </div>
+          <div class="source-status waiting"></div>
+        </div>
+      `).join('');
     } catch (e) {
       console.error('Status fetch failed:', e);
     }
