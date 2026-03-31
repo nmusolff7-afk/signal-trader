@@ -1,0 +1,231 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "description": "APEX Signal Trader Event Taxonomy - 20 core tradeable events (E001-E020)",
+    "last_updated": "2026-03-31",
+    "total_events": 20,
+    "note": "E021-E040 reserved for future expansion. Goal: expand to ~1000 events."
+  },
+  "events": [
+    {
+      "event_id": "E001",
+      "name": "EIA Petroleum",
+      "description": "Inventory draw significantly larger than consensus (bullish oil)",
+      "asset_class": "MCL Long",
+      "direction": "LONG",
+      "magnitude": 4,
+      "hold_time": "10 min",
+      "confidence_threshold": 0.8,
+      "implementation_notes": "Most reliable scheduled event. Hardcode local parser, no Claude."
+    },
+    {
+      "event_id": "E002",
+      "name": "EIA Petroleum",
+      "description": "Inventory build significantly larger than consensus (bearish oil)",
+      "asset_class": "MCL Short",
+      "direction": "SHORT",
+      "magnitude": 4,
+      "hold_time": "10 min",
+      "confidence_threshold": 0.8,
+      "implementation_notes": "Symmetric to E001."
+    },
+    {
+      "event_id": "E003",
+      "name": "Fed RSS",
+      "description": "Surprise rate cut or strongly dovish language",
+      "asset_class": "MES Long, M6E Long, MGC Long, BTC Long",
+      "direction": "LONG",
+      "magnitude": 5,
+      "hold_time": "15 min",
+      "confidence_threshold": 0.85,
+      "implementation_notes": "Highest magnitude event. Local keyword parser for speed."
+    },
+    {
+      "event_id": "E004",
+      "name": "Fed RSS",
+      "description": "Surprise rate hike or strongly hawkish language",
+      "asset_class": "MES Short, M6E Short, MGC Short",
+      "direction": "SHORT",
+      "magnitude": 5,
+      "hold_time": "15 min",
+      "confidence_threshold": 0.85,
+      "implementation_notes": "Symmetric to E003."
+    },
+    {
+      "event_id": "E005",
+      "name": "PHMSA",
+      "description": "Major pipeline rupture or explosion affecting supply",
+      "asset_class": "MCL Long",
+      "direction": "LONG",
+      "magnitude": 3,
+      "hold_time": "2 hr",
+      "confidence_threshold": 0.75,
+      "implementation_notes": "Rare but high impact. Classifier needed for language parsing."
+    },
+    {
+      "event_id": "E006",
+      "name": "Coast Guard/AIS",
+      "description": "Strait of Hormuz or Suez Canal disruption, closure, or incident",
+      "asset_class": "MCL Long",
+      "direction": "LONG",
+      "magnitude": 5,
+      "hold_time": "4 hr",
+      "confidence_threshold": 0.82,
+      "implementation_notes": "Major geopolitical supply shock."
+    },
+    {
+      "event_id": "E007",
+      "name": "EDGAR 8-K",
+      "description": "Surprise M&A announcement for small/mid cap company",
+      "asset_class": "That stock Long",
+      "direction": "LONG",
+      "magnitude": 4,
+      "hold_time": "Same day",
+      "confidence_threshold": 0.78,
+      "implementation_notes": "Must extract ticker. Alpaca execution."
+    },
+    {
+      "event_id": "E008",
+      "name": "EDGAR 8-K",
+      "description": "Going concern notice or major restatement",
+      "asset_class": "That stock Short",
+      "direction": "SHORT",
+      "magnitude": 4,
+      "hold_time": "Same day",
+      "confidence_threshold": 0.78,
+      "implementation_notes": "Must extract ticker. Alpaca execution."
+    },
+    {
+      "event_id": "E009",
+      "name": "FDA MedWatch",
+      "description": "Drug approval for specific company",
+      "asset_class": "That biotech Long",
+      "direction": "LONG",
+      "magnitude": 5,
+      "hold_time": "Same day",
+      "confidence_threshold": 0.88,
+      "implementation_notes": "Binary outcome. Very high win rate historically."
+    },
+    {
+      "event_id": "E010",
+      "name": "FDA MedWatch",
+      "description": "Drug rejection or safety recall for specific company",
+      "asset_class": "That biotech Short",
+      "direction": "SHORT",
+      "magnitude": 5,
+      "hold_time": "Same day",
+      "confidence_threshold": 0.88,
+      "implementation_notes": "Symmetric to E009."
+    },
+    {
+      "event_id": "E011",
+      "name": "Whale Alert",
+      "description": "Large BTC transfer TO known exchange wallet (>$50M)",
+      "asset_class": "BTC Short",
+      "direction": "SHORT",
+      "magnitude": 3,
+      "hold_time": "2 hr",
+      "confidence_threshold": 0.65,
+      "implementation_notes": "Selling signal. Lower confidence \u2014 not all exchange inflows lead to selling."
+    },
+    {
+      "event_id": "E012",
+      "name": "Whale Alert",
+      "description": "Large BTC transfer FROM exchange to cold wallet (>$50M)",
+      "asset_class": "BTC Long",
+      "direction": "LONG",
+      "magnitude": 2,
+      "hold_time": "4 hr",
+      "confidence_threshold": 0.6,
+      "implementation_notes": "Accumulation signal. Weak but documented."
+    },
+    {
+      "event_id": "E013",
+      "name": "Coinglass",
+      "description": "Price within 0.3% of large long liquidation cluster above",
+      "asset_class": "BTC Long",
+      "direction": "LONG",
+      "magnitude": 3,
+      "hold_time": "30 min",
+      "confidence_threshold": 0.68,
+      "implementation_notes": "Price magnet mechanics. Cluster acts as target."
+    },
+    {
+      "event_id": "E014",
+      "name": "X / Trump account",
+      "description": "Post explicitly positive about crypto or Bitcoin",
+      "asset_class": "BTC Long",
+      "direction": "LONG",
+      "magnitude": 4,
+      "hold_time": "1 hr",
+      "confidence_threshold": 0.75,
+      "implementation_notes": "Documented multiple historical examples of 5-10% BTC moves."
+    },
+    {
+      "event_id": "E015",
+      "name": "FAA NOTAM",
+      "description": "Emergency military airspace activation in unexpected region",
+      "asset_class": "MCL Long, MGC Long",
+      "direction": "LONG",
+      "magnitude": 2,
+      "hold_time": "1 hr",
+      "confidence_threshold": 0.58,
+      "implementation_notes": "Weak signal. Requires confirmation from other sources."
+    },
+    {
+      "event_id": "E016",
+      "name": "PACER",
+      "description": "Major Chapter 11 bankruptcy filing for public company",
+      "asset_class": "That stock Short, sector ETF Short",
+      "direction": "SHORT",
+      "magnitude": 4,
+      "hold_time": "Same day",
+      "confidence_threshold": 0.8,
+      "implementation_notes": "High confidence on direction. Must identify sector."
+    },
+    {
+      "event_id": "E017",
+      "name": "GDELT",
+      "description": "Conflict escalation score spike in oil-producing region",
+      "asset_class": "MCL Long",
+      "direction": "LONG",
+      "magnitude": 2,
+      "hold_time": "3 hr",
+      "confidence_threshold": 0.55,
+      "implementation_notes": "Weaker signal. Only trade with 2+ source confirmation."
+    },
+    {
+      "event_id": "E018",
+      "name": "Reddit velocity",
+      "description": "Ticker mentions spike from <10 to >200 in 5 minutes",
+      "asset_class": "That stock Long",
+      "direction": "LONG",
+      "magnitude": 3,
+      "hold_time": "2 hr",
+      "confidence_threshold": 0.62,
+      "implementation_notes": "Meme momentum. Short duration only. High volatility."
+    },
+    {
+      "event_id": "E019",
+      "name": "Stablecoin mint",
+      "description": "USDT or USDC mint event >$500M in single transaction",
+      "asset_class": "BTC Long",
+      "direction": "LONG",
+      "magnitude": 2,
+      "hold_time": "6 hr",
+      "confidence_threshold": 0.58,
+      "implementation_notes": "Weak individual signal. Use as confirmation only."
+    },
+    {
+      "event_id": "E020",
+      "name": "Federal Register",
+      "description": "Emergency rule affecting specific sector published",
+      "asset_class": "Sector ETF \u2014 direction depends",
+      "direction": "VARIES",
+      "magnitude": 3,
+      "hold_time": "Same day",
+      "confidence_threshold": 0.7,
+      "implementation_notes": "Requires classifier to determine sector and direction."
+    }
+  ]
+}
