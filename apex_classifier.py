@@ -1600,8 +1600,7 @@ SOURCE_METHOD_MAP = {
     "Blockchain.com":       "onchain",
     "CoinGecko":            "onchain",
     # Exchange funding rates → coinglass classifier (handles E065/E066/E067)
-    "Binance Funding":      "coinglass",
-    "Bybit Funding":        "coinglass",
+    "Kraken Funding":       "coinglass",   # replaces Binance+Bybit (geo-blocked on Railway)
     "OKX Funding":          "coinglass",
 }
 

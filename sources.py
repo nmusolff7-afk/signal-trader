@@ -731,146 +731,79 @@ class EcbRssSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
-# BINANCE PERPETUALS FUNDING RATE SOURCE
-# Endpoint: api.binance.com/fapi/v1/fundingRate
+# KRAKEN PERPETUALS FUNDING RATE SOURCE
+# Endpoint: futures.kraken.com/derivatives/api/v3/tickers
 # Real-time: Continuous updates every 5 seconds
+# Replaces: Binance (451 geo-blocked) and Bybit (403 geo-blocked) on Railway
 # Classifier: numeric path → E064–E067 (extreme funding rates, OI)
 # ═══════════════════════════════════════════════════════
 
-class BinanceFundingRateSource(BaseSource):
+class KrakenFundingRateSource(BaseSource):
     """
-    Polls Binance perpetuals funding rates in real-time.
-    Detects extreme funding conditions that signal over-leveraged positions.
-    
-    FREE API. No key required (public endpoints only).
+    Polls Kraken perpetuals funding rates in real-time.
+    Covers BTC and ETH perps (PF_XBTUSD, PF_ETHUSD).
+    Replaces Binance/Bybit which are geo-blocked from Railway US servers.
+
+    FREE API. No key required.
     """
-    name = "Binance Funding"
-    interval_seconds = 5.0  # Poll every 5 seconds for live data
-    
-    # Track state to detect changes
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._last_funding_rate = {}  # symbol -> rate
-    
-    async def poll(self) -> None:
-        """
-        Get funding rates for major perpetuals (BTC, ETH, BNB, etc).
-        Detect extreme rates that signal over-leverage.
-        """
-        try:
-            async with aiohttp.ClientSession() as session:
-                # Get funding rates for top symbols
-                symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "SOLUSDT"]
-                
-                for symbol in symbols:
-                    url = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}&limit=1"
-                    
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                        if resp.status != 200:
-                            continue
-                        
-                        data = await resp.json()
-                        if not data:
-                            continue
-                        
-                        latest = data[0]  # Most recent funding rate
-                        funding_rate = float(latest.get("fundingRate", 0))
-                        timestamp = latest.get("fundingTime", "")
-                        
-                        # Create unique key to avoid re-emitting same rate
-                        rate_key = f"{symbol}_{funding_rate:.6f}"
-                        
-                        if self._already_seen(rate_key):
-                            continue
-                        
-                        # Emit if extreme funding (E065: >0.1%/8hr, E066: <-0.05%/8hr)
-                        if funding_rate > 0.001:  # Extreme positive
-                            await self.emit({
-                                "text": f"Binance {symbol}: Extreme positive funding rate {funding_rate*100:.3f}% (longs over-leveraged)",
-                                "symbol": symbol,
-                                "funding_rate": funding_rate,
-                                "direction": "extreme_positive",
-                                "extra_json": json.dumps({
-                                    "symbol": symbol,
-                                    "funding_rate": funding_rate,
-                                    "type": "extreme_positive"
-                                })
-                            })
-                        elif funding_rate < -0.0005:  # Extreme negative
-                            await self.emit({
-                                "text": f"Binance {symbol}: Extreme negative funding rate {funding_rate*100:.3f}% (shorts over-leveraged)",
-                                "symbol": symbol,
-                                "funding_rate": funding_rate,
-                                "direction": "extreme_negative",
-                                "extra_json": json.dumps({
-                                    "symbol": symbol,
-                                    "funding_rate": funding_rate,
-                                    "type": "extreme_negative"
-                                })
-                            })
-                        else:
-                            # Normal rate, still emit for monitoring
-                            await self.emit({
-                                "text": f"Binance {symbol}: Funding rate {funding_rate*100:.4f}%",
-                                "symbol": symbol,
-                                "funding_rate": funding_rate,
-                                "direction": "normal",
-                                "extra_json": json.dumps({
-                                    "symbol": symbol,
-                                    "funding_rate": funding_rate,
-                                    "type": "normal"
-                                })
-                            })
-        
-        except Exception as e:
-            log.warning("[Binance Funding] Error: %s", e)
-
-
-# ═══════════════════════════════════════════════════════
-# BYBIT PERPETUALS FUNDING RATE SOURCE
-# Real-time: 5 second polling
-# ═══════════════════════════════════════════════════════
-
-class BybitFundingRateSource(BaseSource):
-    """Bybit perpetuals funding rates"""
-    name = "Bybit Funding"
+    name = "Kraken Funding"
     interval_seconds = 5.0
-    
+
+    # Kraken perp symbol → human label
+    SYMBOLS = {
+        "PF_XBTUSD": "BTC",
+        "PF_ETHUSD": "ETH",
+    }
+
     def __init__(self, queue: asyncio.Queue):
         super().__init__(queue)
         self._last_funding_rate = {}
-    
+
     async def poll(self) -> None:
         try:
             async with aiohttp.ClientSession() as session:
-                symbols = ["BTCUSDT", "ETHUSDT"]
-                
-                for symbol in symbols:
-                    url = f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={symbol}&limit=1"
-                    
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                        if resp.status != 200:
+                url = "https://futures.kraken.com/derivatives/api/v3/tickers"
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status != 200:
+                        return
+
+                    data = await resp.json()
+                    tickers = {t["symbol"]: t for t in data.get("tickers", [])}
+
+                    for symbol, label in self.SYMBOLS.items():
+                        ticker = tickers.get(symbol)
+                        if not ticker:
                             continue
-                        
-                        data = await resp.json()
-                        if not data.get("result", {}).get("list"):
-                            continue
-                        
-                        latest = data["result"]["list"][0]
-                        funding_rate = float(latest.get("fundingRate", 0))
-                        
-                        rate_key = f"{symbol}_{funding_rate:.6f}"
+
+                        funding_rate = float(ticker.get("fundingRate", 0))
+                        rate_key = f"{symbol}_{funding_rate:.8f}"
                         if self._already_seen(rate_key):
                             continue
-                        
+
+                        if funding_rate > 0.0005:
+                            direction = "extreme_positive"
+                            text = f"Kraken {label}: Extreme positive funding {funding_rate*100:.3f}% (longs over-leveraged)"
+                        elif funding_rate < -0.0005:
+                            direction = "extreme_negative"
+                            text = f"Kraken {label}: Extreme negative funding {funding_rate*100:.3f}% (shorts over-leveraged)"
+                        else:
+                            direction = "normal"
+                            text = f"Kraken {label}: Funding rate {funding_rate*100:.4f}%"
+
                         await self.emit({
-                            "text": f"Bybit {symbol}: Funding {funding_rate*100:.4f}%",
+                            "text": text,
                             "symbol": symbol,
                             "funding_rate": funding_rate,
-                            "extra_json": json.dumps({"symbol": symbol, "funding_rate": funding_rate})
+                            "direction": direction,
+                            "extra_json": json.dumps({
+                                "symbol": symbol,
+                                "funding_rate": funding_rate,
+                                "type": direction
+                            })
                         })
+
         except Exception as e:
-            log.warning("[Bybit Funding] Error: %s", e)
+            log.warning("[Kraken Funding] Error: %s", e)
 
 
 # ═══════════════════════════════════════════════════════
@@ -933,7 +866,7 @@ class BlockchainComSource(BaseSource):
     async def poll(self) -> None:
         try:
             async with aiohttp.ClientSession() as session:
-                url = "https://blockchain.info/api/q?command=unconfirmed_txs"
+                url = "https://blockchain.info/unconfirmed-transactions?format=json"
                 
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     if resp.status != 200:
@@ -1170,8 +1103,7 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         SecPressReleaseSource(queue),
         
         # ── Week 2: Real-Time Exchange Data (LIVE NOW) ──
-        BinanceFundingRateSource(queue),
-        BybitFundingRateSource(queue),
+        KrakenFundingRateSource(queue),   # replaces Binance+Bybit (geo-blocked)
         OkxFundingRateSource(queue),
         BlockchainComSource(queue),
         
