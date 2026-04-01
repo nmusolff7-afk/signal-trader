@@ -1,0 +1,12 @@
+{
+  "total_events": 5,
+  "total_examples": 75,
+  "examples_per_class": {
+    "E032": 15,
+    "E050": 15,
+    "E070": 15,
+    "E075": 15,
+    "E090": 15
+  },
+  "status": "Proof of concept complete - ready for expansion"
+}

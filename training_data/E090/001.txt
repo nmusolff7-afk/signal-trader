@@ -1,0 +1,1 @@
+Coinglass: margin call spike detected. BTC funding rates exceed 0.15% per 8 hours.

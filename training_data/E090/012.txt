@@ -1,0 +1,1 @@
+Ethereum perpetuals funding rates above 0.1% per 8h. Leverage unwinding pressure builds.
