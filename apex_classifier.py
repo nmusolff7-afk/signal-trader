@@ -1597,6 +1597,12 @@ SOURCE_METHOD_MAP = {
     "On-chain data":        "onchain",
     "Glassnode":            "onchain",
     "CryptoQuant":          "onchain",
+    "Blockchain.com":       "onchain",
+    "CoinGecko":            "onchain",
+    # Exchange funding rates → coinglass classifier (handles E065/E066/E067)
+    "Binance Funding":      "coinglass",
+    "Bybit Funding":        "coinglass",
+    "OKX Funding":          "coinglass",
 }
 
 # Sources where keyword will often fail — send to transformer
