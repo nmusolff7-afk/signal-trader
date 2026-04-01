@@ -1,0 +1,10 @@
+apex.db
+*.pyc
+__pycache__/
+.venv/
+node_modules/
+*.xlsx
+*.pdf
+*.png
+*.jpg
+static/

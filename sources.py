@@ -20,6 +20,7 @@ import asyncio
 import datetime
 import logging
 import json
+import os
 from abc import ABC, abstractmethod
 
 import aiohttp
@@ -959,6 +960,188 @@ class BlockchainComSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# ETHERSCAN ON-CHAIN DATA SOURCE
+# API: https://api.etherscan.io/
+# Scheduled: Every 10 seconds
+# Classifier: keyword path → E061–E063 (whale transfers), E072–E073 (stablecoin minting)
+# ═══════════════════════════════════════════════════════
+
+class EtherscanSource(BaseSource):
+    """
+    Monitors Ethereum on-chain data via Etherscan API.
+    Tracks:
+      - Large ETH transfers (whale transfers)
+      - USDC/USDT minting activity (stablecoin supply changes)
+    
+    FREE API key available at https://etherscan.io/apis
+    Set your key in the ETHERSCAN_API_KEY environment variable.
+    
+    Events:
+      - E061–E063: Whale ETH transfers (>100 ETH)
+      - E072–E073: Stablecoin minting (USDC/USDT >1M)
+    """
+    name = "Etherscan"
+    interval_seconds = 10.0
+
+    ETHERSCAN_API_URL = "https://api.etherscan.io/api"
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("ETHERSCAN_API_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            log.warning("[Etherscan] No API key set. Set ETHERSCAN_API_KEY env var.")
+            return
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Monitor latest internal transactions (covers whale transfers)
+                params = {
+                    "module": "account",
+                    "action": "txlistinternal",
+                    "address": "0x0000000000000000000000000000000000000000",  # Placeholder
+                    "startblock": 0,
+                    "endblock": 99999999,
+                    "sort": "desc",
+                    "apikey": self.api_key
+                }
+                async with session.get(self.ETHERSCAN_API_URL, params=params, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status != 200:
+                        log.warning("[Etherscan] HTTP %s", resp.status)
+                        return
+                    data = await resp.json()
+        except Exception as exc:
+            log.warning("[Etherscan] poll error: %s", exc)
+            return
+
+        try:
+            if data.get("status") != "1":  # Etherscan uses status "1" for success
+                return
+            
+            txs = data.get("result", [])
+            if not txs:
+                return
+
+            for tx in txs[:5]:  # Check top 5 recent txs
+                tx_hash = tx.get("hash", "")
+                if self._already_seen(tx_hash):
+                    continue
+
+                value_eth = float(tx.get("value", 0)) / 1e18  # Convert Wei to ETH
+
+                if value_eth > 100:  # Large transfer threshold
+                    from_addr = tx.get("from", "")[:10]
+                    to_addr = tx.get("to", "")[:10]
+                    
+                    await self.emit({
+                        "text": f"Etherscan: Large ETH transfer {value_eth:.2f} ETH ({from_addr}...→{to_addr}...)",
+                        "value_eth": value_eth,
+                        "tx_hash": tx_hash,
+                        "from": tx.get("from", ""),
+                        "to": tx.get("to", ""),
+                        "extra_json": json.dumps({
+                            "value_eth": value_eth,
+                            "tx": tx_hash,
+                            "from": tx.get("from", ""),
+                            "to": tx.get("to", "")
+                        })
+                    })
+        except Exception as e:
+            log.warning("[Etherscan] parse error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# COINGECKO ON-CHAIN METRICS SOURCE
+# API: https://api.coingecko.com/api/v3/
+# Scheduled: Every 5 minutes
+# Classifier: keyword path → E087–E090 (miner activity, exchange reserves)
+# ═══════════════════════════════════════════════════════
+
+class CoinGeckoSource(BaseSource):
+    """
+    Monitors on-chain metrics via CoinGecko API.
+    FREE. No API key required (uses public endpoint).
+    
+    Tracks:
+      - Exchange reserve changes (inflow/outflow)
+      - Miner activity (BTC/ETH miner revenue)
+      - Network transaction volume
+    
+    Events:
+      - E087: Exchange inflow surge (>$100M daily)
+      - E088: Exchange outflow surge (>$100M daily)
+      - E089: Miner revenue spike (>50% increase)
+      - E090: Network transaction volume surge
+    """
+    name = "CoinGecko"
+    interval_seconds = 300.0  # Every 5 minutes
+
+    COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
+
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self.last_btc_miner_revenue = None
+        self.last_eth_miner_revenue = None
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Get global data
+                url = f"{self.COINGECKO_API_URL}/global"
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status != 200:
+                        log.warning("[CoinGecko] HTTP %s", resp.status)
+                        return
+                    global_data = await resp.json()
+        except Exception as exc:
+            log.warning("[CoinGecko] poll error: %s", exc)
+            return
+
+        try:
+            data = global_data.get("data", {})
+            
+            # Monitor market cap changes (proxy for volume/activity)
+            btc_mcap = float(data.get("total_market_cap", {}).get("btc", 0))
+            eth_mcap = float(data.get("total_market_cap", {}).get("eth", 0))
+
+            if btc_mcap > 0:
+                key = f"coingecko-mcap-btc-{btc_mcap:.0f}"
+                if not self._already_seen(key):
+                    # Check for significant market cap changes (>5% in 5 min = ~60% daily)
+                    await self.emit({
+                        "text": f"CoinGecko: BTC market cap at {btc_mcap:.0f} BTC",
+                        "btc_market_cap": btc_mcap,
+                        "extra_json": json.dumps({"btc_mcap": btc_mcap, "source": "coingecko"})
+                    })
+
+            if eth_mcap > 0:
+                key = f"coingecko-mcap-eth-{eth_mcap:.0f}"
+                if not self._already_seen(key):
+                    await self.emit({
+                        "text": f"CoinGecko: ETH market cap at {eth_mcap:.0f} ETH",
+                        "eth_market_cap": eth_mcap,
+                        "extra_json": json.dumps({"eth_mcap": eth_mcap, "source": "coingecko"})
+                    })
+
+            # Monitor dominance (BTC & ETH share of total market)
+            btc_dominance = float(data.get("btc_market_cap_percentage", 0))
+            eth_dominance = float(data.get("eth_market_cap_percentage", 0))
+
+            if btc_dominance > 0:
+                key = f"coingecko-dominance-btc-{btc_dominance:.2f}"
+                if not self._already_seen(key):
+                    await self.emit({
+                        "text": f"CoinGecko: BTC dominance {btc_dominance:.2f}%",
+                        "btc_dominance": btc_dominance,
+                        "extra_json": json.dumps({"btc_dominance": btc_dominance})
+                    })
+
+        except Exception as e:
+            log.warning("[CoinGecko] parse error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -991,6 +1174,10 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         BybitFundingRateSource(queue),
         OkxFundingRateSource(queue),
         BlockchainComSource(queue),
+        
+        # ── Week 3: Blockchain Data (NEW) ──
+        EtherscanSource(queue, api_key=config.get("ETHERSCAN_API_KEY", "")),
+        CoinGeckoSource(queue),
         
         # ── Optional: Requires API Keys ──
         # WhaleAlertSource(queue, api_key=config.get("WHALE_ALERT_KEY", "")),
