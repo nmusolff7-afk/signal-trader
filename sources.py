@@ -4229,6 +4229,504 @@ class CensusEitsSource(BaseSource):
             log.warning("[Census EITS] Error: %s", e)
 
 
+
+
+# ═══════════════════════════════════════════════════════
+# HACKER NEWS (Firebase API)
+# No auth. Top stories + Algolia search for market terms.
+# ═══════════════════════════════════════════════════════
+
+class HackerNewsSource(BaseSource):
+    """Hacker News top stories + market keyword search. No auth."""
+    name = "Hacker News"
+    interval_seconds = 300.0
+
+    ALGOLIA_URL = "https://hn.algolia.com/api/v1/search_by_date"
+    KEYWORDS = ["SEC", "Federal Reserve", "tariff", "sanctions", "bank run", "crypto regulation", "OPEC", "recession"]
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                for kw in self.KEYWORDS:
+                    params = {"query": kw, "tags": "story", "hitsPerPage": "3"}
+                    try:
+                        async with session.get(self.ALGOLIA_URL, params=params, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    for hit in data.get("hits", [])[:2]:
+                        oid = hit.get("objectID", "")
+                        if not oid or self._already_seen(oid):
+                            continue
+                        title = hit.get("title", "")
+                        points = hit.get("points", 0)
+                        if points and int(points) < 10:
+                            continue
+                        await self.emit({
+                            "text": f"HN: {title} ({points} pts)",
+                            "title": title, "points": points,
+                            "extra_json": json.dumps({"id": oid, "title": title, "points": points}),
+                        })
+        except Exception as e:
+            log.warning("[Hacker News] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# NIFC WILDFIRE PERIMETERS (ArcGIS)
+# No auth. Current US wildfire boundaries.
+# ═══════════════════════════════════════════════════════
+
+class NifcWildfireSource(BaseSource):
+    """NIFC active wildfire perimeters — size, region, name. No auth."""
+    name = "NIFC Wildfire"
+    interval_seconds = 600.0
+
+    API_URL = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Public_Wildfire_Perimeters_View/FeatureServer/0/query"
+
+    async def poll(self) -> None:
+        try:
+            params = {"where": "1=1", "outFields": "poly_IncidentName,poly_GISAcres,poly_MapMethod,poly_DateCurrent", "returnGeometry": "false", "f": "json", "resultRecordCount": "10", "orderByFields": "poly_DateCurrent DESC"}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            for feat in data.get("features", []):
+                attr = feat.get("attributes", {})
+                name = attr.get("poly_IncidentName", "")
+                acres = attr.get("poly_GISAcres", 0)
+                key = f"nifc-{name}-{int(acres or 0)}"
+                if not name or self._already_seen(key):
+                    continue
+                await self.emit({
+                    "text": f"NIFC: {name} wildfire — {acres:,.0f} acres" if acres else f"NIFC: {name} wildfire active",
+                    "fire_name": name, "acres": acres,
+                    "extra_json": json.dumps({"name": name, "acres": acres}),
+                })
+        except Exception as e:
+            log.warning("[NIFC Wildfire] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# NASA EONET (Earth Observatory Natural Event Tracker)
+# No auth. Global natural disasters in one feed.
+# ═══════════════════════════════════════════════════════
+
+class NasaEonetSource(BaseSource):
+    """NASA EONET — global natural events (fires, volcanoes, storms). No auth."""
+    name = "NASA EONET"
+    interval_seconds = 900.0
+
+    API_URL = "https://eonet.gsfc.nasa.gov/api/v3/events"
+
+    async def poll(self) -> None:
+        try:
+            params = {"status": "open", "limit": "15"}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            for event in data.get("events", []):
+                eid = event.get("id", "")
+                if not eid or self._already_seen(eid):
+                    continue
+                title = event.get("title", "")
+                categories = ", ".join(c.get("title", "") for c in event.get("categories", []))
+                await self.emit({
+                    "text": f"NASA EONET: {title} [{categories}]",
+                    "title": title, "categories": categories,
+                    "extra_json": json.dumps({"id": eid, "title": title, "categories": categories}),
+                })
+        except Exception as e:
+            log.warning("[NASA EONET] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# RELIEFWEB API (UN humanitarian intelligence)
+# No auth. Every active conflict and disaster worldwide.
+# ═══════════════════════════════════════════════════════
+
+class ReliefWebSource(BaseSource):
+    """ReliefWeb — UN-curated conflict and disaster intelligence. No auth."""
+    name = "ReliefWeb"
+    interval_seconds = 900.0
+
+    API_URL = "https://api.reliefweb.int/v1/reports"
+
+    async def poll(self) -> None:
+        try:
+            params = {"appname": "apex-signal-trader", "limit": "10", "sort[]": "date:desc",
+                      "fields[include][]": "title,date.created,country.name,disaster.name,source.name"}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            for item in data.get("data", []):
+                rid = str(item.get("id", ""))
+                if not rid or self._already_seen(rid):
+                    continue
+                fields = item.get("fields", {})
+                title = fields.get("title", "")
+                countries = ", ".join(c.get("name", "") for c in fields.get("country", [])[:3])
+                await self.emit({
+                    "text": f"ReliefWeb: {title[:120]} ({countries})",
+                    "title": title[:150], "countries": countries,
+                    "extra_json": json.dumps({"id": rid, "title": title[:100], "countries": countries}),
+                })
+        except Exception as e:
+            log.warning("[ReliefWeb] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# CELESTRAK (satellite/debris orbital elements)
+# No auth. All 30,000+ tracked objects in space.
+# ═══════════════════════════════════════════════════════
+
+class CelesTrakSource(BaseSource):
+    """CelesTrak — satellite catalog, Starlink, GPS, military recon. No auth."""
+    name = "CelesTrak"
+    interval_seconds = 7200.0  # every 2 hours
+
+    API_URL = "https://celestrak.org/NORAD/elements/gp.php"
+
+    GROUPS = {"active": "Active Satellites", "starlink": "Starlink", "gps-ops": "GPS Operational"}
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                for group, label in self.GROUPS.items():
+                    params = {"GROUP": group, "FORMAT": "json"}
+                    try:
+                        async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    count = len(data) if isinstance(data, list) else 0
+                    key = f"celestrak-{group}-{count}"
+                    if self._already_seen(key):
+                        continue
+                    await self.emit({
+                        "text": f"CelesTrak: {label} — {count:,} objects tracked",
+                        "group": group, "count": count,
+                        "extra_json": json.dumps({"group": group, "count": count}),
+                    })
+        except Exception as e:
+            log.warning("[CelesTrak] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# NOAA NDBC OCEAN BUOYS
+# No auth. Wind, wave height, pressure from 900+ buoys.
+# ═══════════════════════════════════════════════════════
+
+class NoaaBuoySource(BaseSource):
+    """NOAA NDBC ocean buoys — wind, waves, pressure at key locations. No auth."""
+    name = "NOAA Buoys"
+    interval_seconds = 1800.0
+
+    STATIONS = {
+        "42001": "Gulf of Mexico Central",
+        "44025": "NY Bight",
+        "46025": "Santa Monica Basin",
+        "51000": "Hawaii",
+    }
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                for sid, name in self.STATIONS.items():
+                    url = f"https://www.ndbc.noaa.gov/data/realtime2/{sid}.txt"
+                    try:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                continue
+                            text = await resp.text()
+                    except Exception:
+                        continue
+
+                    lines = text.strip().split("\n")
+                    if len(lines) < 3:
+                        continue
+
+                    # First 2 lines are headers, 3rd is latest data
+                    headers = lines[0].split()
+                    values = lines[2].split()
+                    if len(values) < len(headers):
+                        continue
+
+                    row = dict(zip(headers, values))
+                    wdir = row.get("WDIR", "")
+                    wspd = row.get("WSPD", "")
+                    wvht = row.get("WVHT", "")
+                    pres = row.get("PRES", "")
+                    atmp = row.get("ATMP", "")
+
+                    key = f"buoy-{sid}-{wspd}-{wvht}-{pres}"
+                    if self._already_seen(key):
+                        continue
+
+                    text_parts = [f"wind {wspd}m/s" if wspd != "MM" else None,
+                                  f"waves {wvht}m" if wvht != "MM" else None,
+                                  f"pressure {pres}mb" if pres != "MM" else None]
+                    detail = ", ".join(p for p in text_parts if p)
+
+                    await self.emit({
+                        "text": f"NOAA Buoy {name}: {detail}",
+                        "station": name, "wind_speed": wspd, "wave_height": wvht, "pressure": pres,
+                        "extra_json": json.dumps({"station": sid, "wspd": wspd, "wvht": wvht, "pres": pres}),
+                    })
+        except Exception as e:
+            log.warning("[NOAA Buoys] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# USGS VOLCANO HAZARDS
+# No auth. Alert levels for 170 US volcanoes.
+# ═══════════════════════════════════════════════════════
+
+class UsgsVolcanoSource(BaseSource):
+    """USGS Volcano Hazards — elevated alert levels. No auth."""
+    name = "USGS Volcano"
+    interval_seconds = 1800.0
+
+    API_URL = "https://volcanoes.usgs.gov/hans-public/api/volcano/getElevatedVolcanoes"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            volcanoes = data if isinstance(data, list) else data.get("result", data.get("volcanoes", []))
+            for v in (volcanoes if isinstance(volcanoes, list) else []):
+                if not isinstance(v, dict):
+                    continue
+                name = v.get("vName", v.get("volcanoName", ""))
+                alert = v.get("alertLevel", v.get("alert_level", ""))
+                color = v.get("colorCode", v.get("aviation_color_code", ""))
+                key = f"volcano-{name}-{alert}"
+                if not name or self._already_seen(key):
+                    continue
+                await self.emit({
+                    "text": f"USGS Volcano: {name} — Alert: {alert}, Aviation: {color}",
+                    "volcano": name, "alert_level": alert, "aviation_color": color,
+                    "extra_json": json.dumps({"volcano": name, "alert": alert, "color": color}),
+                })
+        except Exception as e:
+            log.warning("[USGS Volcano] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# BBC NEWS RSS
+# No auth. Top stories, world, business.
+# ═══════════════════════════════════════════════════════
+
+class BbcNewsSource(BaseSource):
+    """BBC News RSS — top stories, world, business. No auth."""
+    name = "BBC News"
+    interval_seconds = 300.0
+
+    FEEDS = {
+        "top": "https://feeds.bbci.co.uk/news/rss.xml",
+        "world": "https://feeds.bbci.co.uk/news/world/rss.xml",
+        "business": "https://feeds.bbci.co.uk/news/business/rss.xml",
+    }
+
+    async def poll(self) -> None:
+        loop = asyncio.get_event_loop()
+        for feed_name, url in self.FEEDS.items():
+            try:
+                feed = await loop.run_in_executor(None, feedparser.parse, url)
+                for entry in feed.entries[:5]:
+                    uid = entry.get("id") or entry.get("link", "")
+                    if self._already_seen(uid):
+                        continue
+                    title = entry.get("title", "")
+                    await self.emit({
+                        "text": f"BBC [{feed_name}]: {title}",
+                        "title": title, "feed": feed_name,
+                        "link": entry.get("link", ""),
+                        "extra_json": json.dumps({"uid": uid, "feed": feed_name}),
+                    })
+            except Exception as e:
+                log.warning("[BBC News] %s error: %s", feed_name, e)
+
+
+# ═══════════════════════════════════════════════════════
+# UK CARBON INTENSITY API
+# No auth. UK grid generation mix by fuel type.
+# ═══════════════════════════════════════════════════════
+
+class UkCarbonSource(BaseSource):
+    """UK Carbon Intensity — grid generation mix by fuel. No auth."""
+    name = "UK Carbon"
+    interval_seconds = 1800.0
+
+    GEN_URL = "https://api.carbonintensity.org.uk/generation"
+    INTENSITY_URL = "https://api.carbonintensity.org.uk/intensity"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.GEN_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+                gen_mix = data.get("data", {}).get("generationmix", [])
+                if not gen_mix:
+                    return
+
+                summary = ", ".join(f"{g.get('fuel','')}: {g.get('perc',0):.0f}%" for g in gen_mix[:5])
+                gas_pct = next((g.get("perc", 0) for g in gen_mix if g.get("fuel") == "gas"), 0)
+
+                key = f"ukcarbon-{int(gas_pct)}"
+                if self._already_seen(key):
+                    return
+
+                await self.emit({
+                    "text": f"UK Grid: {summary} (gas={gas_pct:.0f}%)",
+                    "gas_pct": gas_pct,
+                    "extra_json": json.dumps({"mix": {g["fuel"]: g["perc"] for g in gen_mix}}),
+                })
+        except Exception as e:
+            log.warning("[UK Carbon] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# COPERNICUS EMERGENCY MANAGEMENT SERVICE
+# No auth. Satellite-derived damage footprints.
+# ═══════════════════════════════════════════════════════
+
+class CopernicusEmsSource(BaseSource):
+    """Copernicus EMS — satellite damage assessment for global disasters. No auth."""
+    name = "Copernicus EMS"
+    interval_seconds = 3600.0
+
+    API_URL = "https://mapping.emergency.copernicus.eu/activations/api/activations/"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            activations = data if isinstance(data, list) else data.get("results", data.get("activations", []))
+            for act in (activations if isinstance(activations, list) else [])[:10]:
+                if not isinstance(act, dict):
+                    continue
+                code = act.get("code", act.get("id", ""))
+                title = act.get("title", act.get("name", ""))
+                country = act.get("country", act.get("countries", ""))
+                event_type = act.get("type", act.get("event_type", ""))
+
+                if not code or self._already_seen(code):
+                    continue
+
+                await self.emit({
+                    "text": f"Copernicus EMS: {title} ({event_type}) — {country}",
+                    "code": code, "title": title, "event_type": event_type,
+                    "extra_json": json.dumps({"code": code, "title": title[:100], "type": event_type}),
+                })
+        except Exception as e:
+            log.warning("[Copernicus EMS] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# AL JAZEERA RSS
+# No auth. Middle East, Africa, Asia coverage.
+# ═══════════════════════════════════════════════════════
+
+class AlJazeeraSource(BaseSource):
+    """Al Jazeera RSS — Middle East, Africa, Asia news. No auth."""
+    name = "Al Jazeera"
+    interval_seconds = 600.0
+
+    RSS_URL = "https://www.aljazeera.com/xml/rss/all.xml"
+
+    async def poll(self) -> None:
+        try:
+            loop = asyncio.get_event_loop()
+            feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
+            for entry in feed.entries[:10]:
+                uid = entry.get("id") or entry.get("link", "")
+                if self._already_seen(uid):
+                    continue
+                title = entry.get("title", "")
+                await self.emit({
+                    "text": f"Al Jazeera: {title}",
+                    "title": title,
+                    "link": entry.get("link", ""),
+                    "extra_json": json.dumps({"uid": uid}),
+                })
+        except Exception as e:
+            log.warning("[Al Jazeera] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# US DROUGHT MONITOR
+# No auth. Weekly D0-D4 drought severity.
+# ═══════════════════════════════════════════════════════
+
+class DroughtMonitorSource(BaseSource):
+    """US Drought Monitor — D0-D4 severity for grain/energy impact. No auth."""
+    name = "US Drought"
+    interval_seconds = 7200.0  # every 2 hours (data is weekly Thursday)
+
+    API_URL = "https://usdmdataservices.unl.edu/api/USStatistics/GetDroughtSeverityStatisticsByArea"
+
+    async def poll(self) -> None:
+        try:
+            now = datetime.datetime.utcnow()
+            start = (now - datetime.timedelta(days=14)).strftime("%m/%d/%Y")
+            end = now.strftime("%m/%d/%Y")
+
+            params = {"aoi": "us", "startdate": start, "enddate": end, "statisticsType": "1"}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            items = data if isinstance(data, list) else [data]
+            for item in items[-2:]:
+                if not isinstance(item, dict):
+                    continue
+                date = item.get("MapDate", item.get("mapDate", ""))
+                d0 = item.get("D0", item.get("d0", 0))
+                d1 = item.get("D1", item.get("d1", 0))
+                d2 = item.get("D2", item.get("d2", 0))
+                d3 = item.get("D3", item.get("d3", 0))
+                d4 = item.get("D4", item.get("d4", 0))
+
+                key = f"drought-{date}"
+                if not date or self._already_seen(key):
+                    continue
+
+                await self.emit({
+                    "text": f"US Drought: D0={d0}% D1={d1}% D2={d2}% D3={d3}% D4={d4}% ({date})",
+                    "d0": d0, "d1": d1, "d2": d2, "d3": d3, "d4": d4, "date": date,
+                    "extra_json": json.dumps({"d0": d0, "d1": d1, "d2": d2, "d3": d3, "d4": d4, "date": date}),
+                })
+        except Exception as e:
+            log.warning("[US Drought] Error: %s", e)
+
+
 # ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
@@ -4308,8 +4806,30 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         DojAntitrustSource(queue),
         FtcCompetitionSource(queue),
 
-        # -- Agriculture --
+        # -- Agriculture / Drought --
         UsdaLmprSource(queue),
+        DroughtMonitorSource(queue),
+
+        # -- News / Intelligence --
+        BbcNewsSource(queue),
+        AlJazeeraSource(queue),
+        HackerNewsSource(queue),
+        ReliefWebSource(queue),
+
+        # -- Natural Disasters --
+        NasaEonetSource(queue),
+        NifcWildfireSource(queue),
+        UsgsVolcanoSource(queue),
+        CopernicusEmsSource(queue),
+
+        # -- Oceanographic / Maritime --
+        NoaaBuoySource(queue),
+
+        # -- Space / Satellites --
+        CelesTrakSource(queue),
+
+        # -- Energy Grid (International) --
+        UkCarbonSource(queue),
 
         # -- Aircraft Tracking --
         OpenSkySource(queue, client_id=config.get("OPENSKY_CLIENT_ID", ""), client_secret=config.get("OPENSKY_CLIENT_SECRET", "")),

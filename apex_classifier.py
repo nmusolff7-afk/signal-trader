@@ -1659,6 +1659,24 @@ SOURCE_METHOD_MAP = {
     "FINRA ATS":            "edgar",
     "BEA":                  "bls",
     "Census EITS":          "bls",
+    # News / intelligence
+    "BBC News":             "fed",
+    "Al Jazeera":           "fed",
+    "Hacker News":          "fed",
+    "ReliefWeb":            "noaa",
+    # Natural disasters
+    "NASA EONET":           "noaa",
+    "NIFC Wildfire":        "noaa",
+    "USGS Volcano":         "noaa",
+    "Copernicus EMS":       "noaa",
+    # Oceanographic
+    "NOAA Buoys":           "noaa",
+    # Space
+    "CelesTrak":            "noaa",
+    # Grid / energy
+    "UK Carbon":            "eia",
+    # Agriculture
+    "US Drought":           "eia",
 }
 
 # Sources where keyword will often fail — send to transformer

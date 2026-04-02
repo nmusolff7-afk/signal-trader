@@ -77,6 +77,9 @@ ALL_SOURCES = [
     "Kraken Funding", "OKX Funding", "Blockchain.com",
     "dYdX", "Mempool", "Hyperliquid", "DeFi Llama",
     "EIA NatGas", "Etherscan", "CoinGecko",
+    "BBC News", "Al Jazeera", "Hacker News", "ReliefWeb",
+    "NASA EONET", "NIFC Wildfire", "USGS Volcano", "Copernicus EMS",
+    "NOAA Buoys", "CelesTrak", "UK Carbon", "US Drought",
 ]
 
 # ── API keys we expect ───────────────────────────────────────────────────────
