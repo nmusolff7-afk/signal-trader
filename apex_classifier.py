@@ -1639,6 +1639,7 @@ SOURCE_METHOD_MAP = {
     "NASA FIRMS":           "noaa",
     "GIE AGSI":             "eia",
     "OpenSky":              "noaa",
+    "ERCOT":                "eia",
 }
 
 # Sources where keyword will often fail — send to transformer

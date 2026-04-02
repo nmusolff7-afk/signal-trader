@@ -3116,6 +3116,136 @@ class OpenSkySource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# ERCOT PUBLIC API (Texas Grid)
+# 5-min SCED LMPs, wind/solar production, system load.
+# Requires subscription key (Ocp-Apim-Subscription-Key header).
+# ═══════════════════════════════════════════════════════
+
+class ErcotSource(BaseSource):
+    """
+    ERCOT Texas grid — 5-min LMPs, wind/solar production, system load.
+    Price spikes from $25 to $5000/MWh cap during heat waves or wind drops.
+    Wind ramp-downs force gas generation online → Henry Hub gas demand signal.
+    Free registration required for subscription key.
+    """
+    name = "ERCOT"
+    interval_seconds = 300.0  # every 5 min
+
+    BASE_URL = "https://api.ercot.com/api/public-reports"
+
+    # Key data products
+    ENDPOINTS = {
+        "lmp": "/np6-788-cd/lmp_node_zone_hub",      # 5-min SCED LMPs
+        "wind": "/np4-732-cd/wpp_hrly_avrg_actl_fcast",  # wind production
+        "solar": "/np4-745-cd/spp_hrly_actual_fcast_geo",  # solar production
+    }
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("ERCOT_API_KEY", "")
+        self._last_lmp = {}
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+
+        headers = {"Ocp-Apim-Subscription-Key": self.api_key}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                for data_type, endpoint in self.ENDPOINTS.items():
+                    url = f"{self.BASE_URL}{endpoint}"
+                    try:
+                        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    # ERCOT returns nested data structures
+                    records = data.get("data", data.get("records", []))
+                    if isinstance(records, dict):
+                        records = records.get("records", records.get("data", []))
+                    if not isinstance(records, list):
+                        continue
+
+                    for record in records[:5]:
+                        if not isinstance(record, dict):
+                            continue
+
+                        if data_type == "lmp":
+                            zone = record.get("SettlementPoint", record.get("settlement_point", ""))
+                            lmp = record.get("LMP", record.get("lmp", 0))
+                            interval = record.get("DeliveryInterval", record.get("interval", ""))
+
+                            try:
+                                lmp_val = float(lmp)
+                            except (ValueError, TypeError):
+                                continue
+
+                            key = f"ercot-lmp-{zone}-{interval}"
+                            if self._already_seen(key):
+                                continue
+
+                            # Detect price spikes
+                            last = self._last_lmp.get(zone, lmp_val)
+                            self._last_lmp[zone] = lmp_val
+                            spike = ""
+                            if lmp_val > 100:
+                                spike = " [PRICE SPIKE]"
+                            elif lmp_val > 50:
+                                spike = " [ELEVATED]"
+
+                            await self.emit({
+                                "text": f"ERCOT LMP: {zone} = ${lmp_val:.2f}/MWh{spike}",
+                                "zone": zone,
+                                "lmp": lmp_val,
+                                "extra_json": json.dumps({"zone": zone, "lmp": lmp_val, "interval": interval}),
+                            })
+
+                        elif data_type in ("wind", "solar"):
+                            gen_type = data_type.upper()
+                            actual = record.get("ActualMW", record.get("actual", record.get("ACTUAL", 0)))
+                            forecast = record.get("CopHSL", record.get("forecast", record.get("FORECAST", 0)))
+                            hour = record.get("HourEnding", record.get("hour", ""))
+
+                            try:
+                                actual_val = float(actual or 0)
+                                forecast_val = float(forecast or 0)
+                            except (ValueError, TypeError):
+                                continue
+
+                            key = f"ercot-{data_type}-{hour}-{actual_val:.0f}"
+                            if self._already_seen(key):
+                                continue
+
+                            delta = actual_val - forecast_val
+                            delta_pct = (delta / forecast_val * 100) if forecast_val else 0
+
+                            text = f"ERCOT {gen_type}: {actual_val:,.0f} MW actual"
+                            if forecast_val:
+                                text += f" vs {forecast_val:,.0f} MW forecast ({delta_pct:+.1f}%)"
+
+                            await self.emit({
+                                "text": text,
+                                "gen_type": gen_type,
+                                "actual_mw": actual_val,
+                                "forecast_mw": forecast_val,
+                                "delta_pct": delta_pct,
+                                "extra_json": json.dumps({
+                                    "type": gen_type,
+                                    "actual": actual_val,
+                                    "forecast": forecast_val,
+                                    "delta_pct": round(delta_pct, 1),
+                                }),
+                            })
+
+        except Exception as e:
+            log.warning("[ERCOT] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -3161,10 +3291,11 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         NhcTropicalSource(queue),
         NasaFirmsSource(queue, api_key=config.get("NASA_FIRMS_KEY", "")),
 
-        # -- Infrastructure / Trade --
+        # -- Infrastructure / Trade / Grid --
         FaaNasSource(queue),
         CbpBorderSource(queue),
         MisoGridSource(queue),
+        ErcotSource(queue, api_key=config.get("ERCOT_API_KEY", "")),
 
         # -- Global Event Detection --
         GdeltDocSource(queue),

@@ -205,6 +205,7 @@ async def main() -> None:
         "CONGRESS_API_KEY": os.environ.get("CONGRESS_API_KEY", ""),
         "NASA_FIRMS_KEY": os.environ.get("NASA_FIRMS_KEY", ""),
         "GIE_API_KEY": os.environ.get("GIE_API_KEY", ""),
+        "ERCOT_API_KEY": os.environ.get("ERCOT_API_KEY", ""),
         "ETHERSCAN_API_KEY": os.environ.get("ETHERSCAN_API_KEY", ""),
     }
 
