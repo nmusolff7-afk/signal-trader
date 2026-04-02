@@ -5,207 +5,332 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>APEX SIGNAL TRADER</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    :root {
-      --bg: #0a0e12; --bg2: #0f141a; --bg3: #151d27;
-      --border: #1e2d3d; --accent: #00d4ff; --green: #00ff88;
-      --red: #ff3355; --orange: #ff6b35; --yellow: #ffd700;
-      --dim: #3a5068; --text: #e8f4f8; --text-dim: #6a8a9a;
-      --mono: 'Courier New', monospace; --sans: 'Segoe UI', Tahoma, sans-serif;
-    }
-    html, body { background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 12px; height: 100%; overflow: hidden; }
-    header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 8px 16px; display: flex; justify-content: space-between; align-items: center; }
-    .logo { font-size: 18px; font-weight: bold; letter-spacing: 2px; color: var(--accent); font-family: var(--sans); }
-    .logo span { color: var(--orange); }
-    .header-stats { display: flex; gap: 16px; font-size: 11px; color: var(--text-dim); }
-    .header-stats b { color: var(--accent); }
-    .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s ease-in-out infinite; display: inline-block; margin-right: 4px; }
-    @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+    *{margin:0;padding:0;box-sizing:border-box}
+    :root{--bg:#0a0e12;--bg2:#0f141a;--bg3:#151d27;--border:#1e2d3d;--accent:#00d4ff;--green:#00ff88;--red:#ff3355;--orange:#ff6b35;--yellow:#ffd700;--purple:#b388ff;--dim:#3a5068;--text:#e8f4f8;--text-dim:#6a8a9a;--mono:'Courier New',monospace;--sans:'Segoe UI',Tahoma,sans-serif}
+    html,body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:12px;height:100%;overflow:hidden}
 
-    .container { display: grid; grid-template-columns: 220px 1fr 260px; gap: 1px; height: calc(100vh - 37px); background: var(--border); overflow: hidden; }
-    .panel { display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
-    .panel-header { background: var(--bg2); padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 9px; font-weight: bold; letter-spacing: 2px; color: var(--text-dim); display: flex; justify-content: space-between; align-items: center; }
-    .panel-body { flex: 1; overflow-y: auto; padding: 4px; }
+    header{background:var(--bg2);border-bottom:1px solid var(--border);padding:6px 16px;display:flex;justify-content:space-between;align-items:center}
+    .logo{font-size:16px;font-weight:bold;letter-spacing:2px;color:var(--accent);font-family:var(--sans)}
+    .logo span{color:var(--orange)}
+    .hdr{display:flex;gap:14px;font-size:10px;color:var(--text-dim);align-items:center}
+    .hdr b{color:var(--accent)}
+    .pulse{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:p 2s infinite;display:inline-block;margin-right:3px}
+    @keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
+    .latency{color:var(--green);font-size:9px}
 
-    .source-item { background: var(--bg2); border: 1px solid var(--border); padding: 3px 6px; margin-bottom: 2px; border-radius: 2px; display: flex; justify-content: space-between; align-items: center; font-size: 10px; }
-    .source-item.inactive { opacity: 0.35; }
-    .source-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .source-count { color: var(--accent); font-weight: bold; margin-right: 4px; font-size: 9px; min-width: 20px; text-align: right; }
-    .source-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
-    .source-dot.waiting { background: var(--dim); }
+    .container{display:grid;grid-template-columns:200px 1fr 240px;gap:1px;height:calc(100vh - 33px);background:var(--border);overflow:hidden}
+    .panel{display:flex;flex-direction:column;background:var(--bg);overflow:hidden}
+    .ph{background:var(--bg2);padding:5px 8px;border-bottom:1px solid var(--border);font-size:8px;font-weight:bold;letter-spacing:2px;color:var(--text-dim);display:flex;justify-content:space-between;align-items:center}
+    .pb{flex:1;overflow-y:auto;padding:3px}
 
-    .event-item { background: var(--bg2); border-left: 2px solid var(--border); padding: 4px 6px; margin-bottom: 2px; border-radius: 2px; font-size: 10px; }
-    .event-item.classified { border-left-color: var(--accent); background: rgba(0,212,255,0.03); }
-    .event-item.tradeable { border-left-color: var(--green); background: rgba(0,255,136,0.03); }
-    .event-item.new { animation: fadeIn 0.3s ease; }
-    @keyframes fadeIn { from{opacity:0;transform:translateX(-4px);} to{opacity:1;transform:translateX(0);} }
+    /* Sources */
+    .src{background:var(--bg2);border:1px solid var(--border);padding:2px 5px;margin-bottom:1px;border-radius:1px;display:flex;justify-content:space-between;align-items:center;font-size:9px}
+    .src.off{opacity:.25}
+    .src .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .src .c{color:var(--accent);font-weight:bold;margin-right:3px;min-width:16px;text-align:right;font-size:8px}
+    .src .d{width:4px;height:4px;border-radius:50%;background:var(--green);flex-shrink:0}
+    .src .d.w{background:var(--dim)}
 
-    .event-meta { display: flex; align-items: center; gap: 4px; margin-bottom: 1px; }
-    .event-time { color: var(--text-dim); font-size: 8px; }
-    .event-source { color: var(--orange); font-weight: bold; font-size: 9px; }
-    .event-id { color: var(--yellow); font-weight: bold; font-size: 9px; }
-    .event-conf { color: var(--text-dim); font-size: 8px; margin-left: auto; }
-    .event-text { color: var(--text-dim); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Category headers in feed */
+    .cat-hdr{background:var(--bg3);padding:3px 6px;font-size:8px;font-weight:bold;letter-spacing:1.5px;color:var(--text-dim);border-left:2px solid var(--dim);margin:4px 0 2px 0;position:sticky;top:0;z-index:1}
+    .cat-hdr.macro{border-left-color:var(--accent);color:var(--accent)}
+    .cat-hdr.crypto{border-left-color:var(--yellow);color:var(--yellow)}
+    .cat-hdr.geo{border-left-color:var(--red);color:var(--red)}
+    .cat-hdr.sentiment{border-left-color:var(--purple);color:var(--purple)}
+    .cat-hdr.infra{border-left-color:var(--orange);color:var(--orange)}
 
-    /* Price ticker column */
-    .price-row { background: var(--bg2); border: 1px solid var(--border); padding: 6px 8px; margin-bottom: 2px; border-radius: 2px; display: flex; justify-content: space-between; align-items: center; }
-    .price-symbol { font-size: 11px; font-weight: bold; color: var(--text); }
-    .price-value { font-size: 13px; font-weight: bold; font-family: var(--sans); }
-    .price-value.up { color: var(--green); }
-    .price-value.down { color: var(--red); }
-    .price-change { font-size: 10px; }
-    .price-change.up { color: var(--green); }
-    .price-change.down { color: var(--red); }
-    .price-detail { font-size: 8px; color: var(--text-dim); margin-top: 2px; }
+    /* Events */
+    .ev{background:var(--bg2);border-left:2px solid var(--border);padding:3px 5px;margin-bottom:1px;border-radius:1px;font-size:9px}
+    .ev.c0{border-left-color:var(--accent);background:rgba(0,212,255,.03)}
+    .ev.c1{border-left-color:var(--green);background:rgba(0,255,136,.03)}
+    .ev.new{animation:fi .25s ease}
+    @keyframes fi{from{opacity:0;transform:translateX(-3px)}to{opacity:1;transform:translateX(0)}}
+    .ev .m{display:flex;align-items:center;gap:3px;margin-bottom:1px}
+    .ev .t{color:var(--text-dim);font-size:7px}
+    .ev .s{color:var(--orange);font-weight:bold;font-size:8px}
+    .ev .e{color:var(--yellow);font-weight:bold;font-size:8px}
+    .ev .cf{color:var(--text-dim);font-size:7px;margin-left:auto}
+    .ev .tx{color:var(--text-dim);font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-track { background: var(--bg); }
-    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    /* Prices */
+    .pr{background:var(--bg2);border:1px solid var(--border);padding:5px 7px;margin-bottom:2px;border-radius:2px;display:flex;justify-content:space-between;align-items:center}
+    .pr .sym{font-size:11px;font-weight:bold}
+    .pr .val{font-size:14px;font-weight:bold;font-family:var(--sans)}
+    .pr .val.up{color:var(--green)}.pr .val.dn{color:var(--red)}
+    .pr .chg{font-size:9px}.pr .chg.up{color:var(--green)}.pr .chg.dn{color:var(--red)}
+    .pr .det{font-size:7px;color:var(--text-dim);margin-top:1px}
+
+    /* Sentiment gauges in right column */
+    .gauge{background:var(--bg2);border:1px solid var(--border);padding:5px 7px;margin-bottom:2px;border-radius:2px}
+    .gauge .label{font-size:8px;color:var(--text-dim);letter-spacing:1px}
+    .gauge .bar{height:4px;background:var(--bg3);border-radius:2px;margin:3px 0;overflow:hidden}
+    .gauge .fill{height:100%;border-radius:2px;transition:width .5s ease}
+    .gauge .val{font-size:11px;font-weight:bold;font-family:var(--sans)}
+
+    ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
   </style>
 </head>
 <body>
 
 <header>
-  <div class="logo">APEX <span>SIGNAL</span> TRADER</div>
-  <div class="header-stats">
-    <span><span class="pulse"></span> LIVE</span>
-    <span>Events: <b id="h-events">0</b></span>
-    <span>Classified: <b id="h-classified">0</b></span>
-    <span>Tradeable: <b id="h-tradeable">0</b></span>
-    <span>Sources: <b id="h-sources">0</b></span>
+  <div class="logo">APEX <span>SIGNAL</span></div>
+  <div class="hdr">
+    <span><span class="pulse"></span>LIVE</span>
+    <span>Signals: <b id="h-ev">0</b></span>
+    <span>Classified: <b id="h-cl">0</b></span>
+    <span>Tradeable: <b id="h-tr">0</b></span>
+    <span>Sources: <b id="h-sr">0</b></span>
+    <span class="latency" id="h-lat"></span>
   </div>
 </header>
 
 <div class="container">
   <!-- LEFT: Sources -->
   <div class="panel">
-    <div class="panel-header"><span>SOURCES</span><span id="src-active" style="color:var(--accent)">0/0</span></div>
-    <div class="panel-body" id="sources-list"></div>
+    <div class="ph"><span>SOURCES</span><span id="sa" style="color:var(--accent)">0/0</span></div>
+    <div class="pb" id="sl"></div>
   </div>
 
-  <!-- CENTER: Event feed (no price events) -->
+  <!-- CENTER: Categorized signal feed -->
   <div class="panel">
-    <div class="panel-header"><span>SIGNAL FEED</span><span id="feed-count" style="color:var(--text-dim)">0</span></div>
-    <div class="panel-body" id="events-list"></div>
+    <div class="ph"><span>SIGNAL FEED</span><span id="fc" style="color:var(--text-dim)">0</span></div>
+    <div class="pb" id="fl"></div>
   </div>
 
-  <!-- RIGHT: Price ticker -->
+  <!-- RIGHT: Prices + Sentiment gauges -->
   <div class="panel">
-    <div class="panel-header"><span>LIVE PRICES</span><span id="price-count" style="color:var(--text-dim)">0</span></div>
-    <div class="panel-body" id="price-list"></div>
+    <div class="ph"><span>MARKET DATA</span><span id="pc" style="color:var(--text-dim)"></span></div>
+    <div class="pb" id="rl"></div>
   </div>
 </div>
 
 <script>
-const API = '/api';
-let lastEventHash = '';
-let lastStatusHash = '';
-let knownIds = new Set();
+const API='/api';
+let latestId=0;
+let allEvents=[];
+let knownIds=new Set();
+let lastStatusHash='';
+const MAX_EVENTS=500;
 
-async function updateStatus() {
-  try {
-    const r = await fetch(`${API}/status`);
-    const d = await r.json();
-    const h = JSON.stringify([d.event_count, d.tradeable_count, d.source_health?.length]);
-    if (h === lastStatusHash) return;
-    lastStatusHash = h;
+// Source category mapping for visual grouping
+const CAT_MAP={
+  // Macro / Government
+  'EIA Petroleum':'macro','EIA NatGas':'macro','OPEC RSS':'macro','Fed RSS':'macro','ECB RSS':'macro',
+  'Federal Register':'macro','FedReg PrePub':'macro','SEC Press Releases':'macro','BLS':'macro',
+  'Treasury Auction':'macro','CFTC COT':'macro','FRED':'macro','BEA':'macro','Census EITS':'macro',
+  'White House':'macro','Congress':'macro','BoE':'macro','BOJ':'macro','SNB':'macro','BoC':'macro',
+  // Crypto / DeFi
+  'Kraken Funding':'crypto','OKX Funding':'crypto','Blockchain.com':'crypto','dYdX':'crypto',
+  'Mempool':'crypto','Hyperliquid':'crypto','DeFi Llama':'crypto','CoinGecko':'crypto','Etherscan':'crypto',
+  'Crypto F&G':'crypto','SentiCrypt':'crypto',
+  // Geopolitical / Safety
+  'GDELT':'geo','WHO Outbreak':'geo','ACLED':'geo','ReliefWeb':'geo','BBC News':'geo','Al Jazeera':'geo',
+  'OFAC Sanctions':'geo','DOJ Antitrust':'geo','FTC':'geo','OpenSky':'geo','AISStream':'geo',
+  'NRC Reactor':'geo','Copernicus EMS':'geo',
+  // Sentiment / Prediction
+  'CNN Fear&Greed':'sentiment','StockTwits':'sentiment','4chan /biz/':'sentiment','Hacker News':'sentiment',
+  'Polymarket':'sentiment','Kalshi':'sentiment','Metaculus':'sentiment','PredictIt':'sentiment',
+  'Manifold':'sentiment','Finnhub':'sentiment','NewsAPI.ai':'sentiment','MarketAux':'sentiment',
+  'Currents API':'sentiment','Wiki Pageviews':'sentiment','FINRA ATS':'sentiment','CBOE P/C':'sentiment',
+  'Eurostat':'sentiment',
+  // Infrastructure / Physical
+  'USGS Earthquake':'infra','NWS Weather':'infra','NHC Tropical':'infra','NOAA Space Weather':'infra',
+  'NASA FIRMS':'infra','FAA NAS':'infra','CBP Border':'infra','MISO Grid':'infra','ERCOT':'infra',
+  'CAISO':'infra','NOAA Ports':'infra','USGS Water':'infra','NOAA Buoys':'infra','NIFC Wildfire':'infra',
+  'NASA EONET':'infra','USGS Volcano':'infra','UK Carbon':'infra','US Drought':'infra','CelesTrak':'infra',
+  'AirNow':'infra','USDA LMPR':'infra',
+  // SEC / Regulatory
+  'EDGAR Filings':'macro','SEC Form 4':'macro','FDA MedWatch':'macro','SEC Enforcement':'macro',
+  'FERC Energy':'macro',
+};
 
-    document.getElementById('h-events').textContent = d.event_count || 0;
-    const cls = (d.event_count||0) - (d.unclassified_count||0);
-    document.getElementById('h-classified').textContent = cls;
-    document.getElementById('h-tradeable').textContent = d.tradeable_count || 0;
+const CAT_LABELS={
+  macro:{label:'MACRO / GOVERNMENT / REGULATORY',cls:'macro'},
+  crypto:{label:'CRYPTO / DEFI / ON-CHAIN',cls:'crypto'},
+  geo:{label:'GEOPOLITICAL / CONFLICT / SAFETY',cls:'geo'},
+  sentiment:{label:'SENTIMENT / PREDICTION MARKETS',cls:'sentiment'},
+  infra:{label:'INFRASTRUCTURE / PHYSICAL WORLD',cls:'infra'},
+};
+const CAT_ORDER=['macro','crypto','geo','sentiment','infra'];
 
-    const health = d.source_health || [];
-    const active = health.filter(s => s.total > 0).length;
-    document.getElementById('h-sources').textContent = `${active}/${health.length}`;
-    document.getElementById('src-active').textContent = `${active}/${health.length}`;
+async function updateStatus(){
+  try{
+    const t0=performance.now();
+    const r=await fetch(`${API}/status`);
+    const d=await r.json();
+    const lat=Math.round(performance.now()-t0);
+    document.getElementById('h-lat').textContent=`${lat}ms`;
 
-    // Sort: active first by count desc, then inactive alphabetical
-    health.sort((a,b) => {
-      if (a.total > 0 && b.total === 0) return -1;
-      if (a.total === 0 && b.total > 0) return 1;
-      if (a.total > 0 && b.total > 0) return b.total - a.total;
+    const h=JSON.stringify([d.event_count,d.tradeable_count]);
+    if(h===lastStatusHash)return;
+    lastStatusHash=h;
+
+    document.getElementById('h-ev').textContent=d.event_count||0;
+    const cls=(d.event_count||0)-(d.unclassified_count||0);
+    document.getElementById('h-cl').textContent=cls;
+    document.getElementById('h-tr').textContent=d.tradeable_count||0;
+
+    const health=d.source_health||[];
+    const active=health.filter(s=>s.total>0).length;
+    document.getElementById('h-sr').textContent=`${active}/${health.length}`;
+    document.getElementById('sa').textContent=`${active}/${health.length}`;
+
+    health.sort((a,b)=>{
+      if(a.total>0&&b.total===0)return-1;
+      if(a.total===0&&b.total>0)return 1;
+      if(a.total>0&&b.total>0)return b.total-a.total;
       return a.source.localeCompare(b.source);
     });
 
-    document.getElementById('sources-list').innerHTML = health.map(s => {
-      const on = s.total > 0;
-      return `<div class="source-item ${on?'':'inactive'}"><div class="source-name">${s.source}</div><div class="source-count">${s.total}</div><div class="source-dot ${on?'':'waiting'}"></div></div>`;
+    document.getElementById('sl').innerHTML=health.map(s=>{
+      const on=s.total>0;
+      const cat=CAT_MAP[s.source]||'';
+      const catColor=cat==='macro'?'var(--accent)':cat==='crypto'?'var(--yellow)':cat==='geo'?'var(--red)':cat==='sentiment'?'var(--purple)':cat==='infra'?'var(--orange)':'var(--text)';
+      return`<div class="src ${on?'':'off'}"><div class="n" style="border-left:2px solid ${on?catColor:'transparent'};padding-left:3px">${s.source}</div><div class="c">${s.total}</div><div class="d ${on?'':'w'}"></div></div>`;
     }).join('');
-  } catch(e) { console.error('Status:', e); }
+  }catch(e){console.error(e)}
 }
 
-async function updateEvents() {
-  try {
-    const r = await fetch(`${API}/events?limit=250`);
-    const d = await r.json();
-    if (!d.events || !d.events.length) return;
+async function updateEvents(){
+  try{
+    const url=latestId>0?`${API}/events?limit=50&since_id=${latestId}`:`${API}/events?limit=300`;
+    const r=await fetch(url);
+    const d=await r.json();
 
-    const h = d.events[0]?.id + '-' + d.events.length;
-    if (h === lastEventHash) return;
-    lastEventHash = h;
+    if(!d.events||!d.events.length)return;
 
-    // Split: price events vs signal events
-    const prices = [];
-    const signals = [];
-    for (const e of d.events) {
-      if (e.source === 'Kraken Price') {
-        prices.push(e);
-      } else {
-        signals.push(e);
+    // Update latest ID
+    if(d.latest_id)latestId=d.latest_id;
+
+    // Prepend new events
+    let hasNew=false;
+    for(const e of d.events){
+      if(!knownIds.has(e.id)){
+        knownIds.add(e.id);
+        e._new=true;
+        allEvents.unshift(e);
+        hasNew=true;
       }
     }
 
-    document.getElementById('feed-count').textContent = `${signals.length} signals`;
+    if(!hasNew)return;
 
-    // Render signal feed
-    document.getElementById('events-list').innerHTML = signals.map(e => {
-      const time = new Date(e.ts).toLocaleTimeString();
-      const hasEv = e.event_id && e.event_id !== 'NO_EVENT';
-      const trd = e.tradeable;
-      const isNew = !knownIds.has(e.id);
-      if (isNew) knownIds.add(e.id);
-      let cls = trd ? 'tradeable' : (hasEv ? 'classified' : '');
-      if (isNew) cls += ' new';
-      const txt = (e.raw_text||'').substring(0,160);
-      return `<div class="event-item ${cls}"><div class="event-meta"><span class="event-time">${time}</span><span class="event-source">${e.source}</span>${hasEv?`<span class="event-id">${e.event_id}</span><span class="event-conf">${(e.confidence||0).toFixed(2)}</span>`:''}</div><div class="event-text">${txt}</div></div>`;
-    }).join('');
+    // Trim old events
+    if(allEvents.length>MAX_EVENTS)allEvents.length=MAX_EVENTS;
 
-    // Render price column — deduplicate to latest per symbol
-    const latestPrices = {};
-    for (const p of prices) {
-      const txt = p.raw_text || '';
-      const match = txt.match(/^(\w+\/USD)\s+\$([\d,.]+)\s+\(([^)]+)\)\s+H:([\d,.]+)\s+L:([\d,.]+)/);
-      if (match) {
-        const [, sym, price, change, hi, lo] = match;
-        if (!latestPrices[sym]) {
-          latestPrices[sym] = { sym, price, change, hi, lo, time: new Date(p.ts).toLocaleTimeString() };
-        }
-      }
+    // Split prices vs signals
+    const prices=[];
+    const signals=[];
+    for(const e of allEvents){
+      if(e.source==='Kraken Price')prices.push(e);
+      else signals.push(e);
     }
 
-    const priceArr = Object.values(latestPrices);
-    document.getElementById('price-count').textContent = `${prices.length} ticks`;
+    document.getElementById('fc').textContent=`${signals.length} signals`;
 
-    // Also show all price events as a scrollable ticker
-    document.getElementById('price-list').innerHTML =
-      priceArr.map(p => {
-        const up = !p.change.startsWith('-');
-        return `<div class="price-row"><div><div class="price-symbol">${p.sym}</div><div class="price-detail">H:${p.hi} L:${p.lo} @ ${p.time}</div></div><div style="text-align:right"><div class="price-value ${up?'up':'down'}">$${p.price}</div><div class="price-change ${up?'up':'down'}">${p.change}</div></div></div>`;
-      }).join('') +
-      '<div style="margin-top:8px;font-size:9px;color:var(--text-dim);padding:4px">RECENT TICKS</div>' +
-      prices.slice(0,40).map(p => {
-        const time = new Date(p.ts).toLocaleTimeString();
-        const txt = (p.raw_text||'').replace(/^[A-Z]+\/USD\s+/, '');
-        const up = !txt.includes('-');
-        return `<div class="event-item" style="border-left-color:${up?'var(--green)':'var(--red)'}"><div class="event-meta"><span class="event-time">${time}</span></div><div class="event-text">${p.raw_text||''}</div></div>`;
-      }).join('');
+    // Group signals by category
+    const grouped={};
+    for(const cat of CAT_ORDER)grouped[cat]=[];
+    for(const e of signals){
+      const cat=CAT_MAP[e.source]||'infra';
+      if(!grouped[cat])grouped[cat]=[];
+      grouped[cat].push(e);
+    }
 
-  } catch(e) { console.error('Events:', e); }
+    // Render categorized feed
+    let html='';
+    for(const cat of CAT_ORDER){
+      const items=grouped[cat];
+      if(!items||!items.length)continue;
+      const info=CAT_LABELS[cat];
+      html+=`<div class="cat-hdr ${info.cls}">${info.label} (${items.length})</div>`;
+      for(const e of items.slice(0,80)){
+        const time=new Date(e.ts).toLocaleTimeString();
+        const hasEv=e.event_id&&e.event_id!=='NO_EVENT';
+        const trd=e.tradeable;
+        const isNew=e._new;
+        if(isNew)e._new=false;
+        let cls=trd?'c1':(hasEv?'c0':'');
+        if(isNew)cls+=' new';
+        const txt=(e.raw_text||'').substring(0,180);
+        html+=`<div class="ev ${cls}"><div class="m"><span class="t">${time}</span><span class="s">${e.source}</span>${hasEv?`<span class="e">${e.event_id}</span><span class="cf">${(e.confidence||0).toFixed(2)}</span>`:''}</div><div class="tx">${txt}</div></div>`;
+      }
+    }
+    document.getElementById('fl').innerHTML=html;
+
+    // Right column: prices + sentiment gauges
+    renderRight(prices);
+  }catch(e){console.error(e)}
 }
 
-setInterval(updateStatus, 5000);
-setInterval(updateEvents, 3000);
+function renderRight(prices){
+  // Latest prices
+  const latestPrices={};
+  for(const p of prices){
+    const txt=p.raw_text||'';
+    const m=txt.match(/^(\w+\/USD)\s+\$([\d,.]+)\s+\(([^)]+)\)\s+H:([\d,.]+)\s+L:([\d,.]+)/);
+    if(m){
+      const[,sym,price,change,hi,lo]=m;
+      if(!latestPrices[sym])latestPrices[sym]={sym,price,change,hi,lo,time:new Date(p.ts).toLocaleTimeString()};
+    }
+  }
+
+  // Find sentiment values from allEvents
+  let cnnFG=null,cryptoFG=null,cboePC=null;
+  for(const e of allEvents){
+    if(!cnnFG&&e.source==='CNN Fear&Greed'){
+      const m=(e.raw_text||'').match(/(\d+)\/100/);
+      if(m)cnnFG={score:parseInt(m[1]),text:e.raw_text};
+    }
+    if(!cryptoFG&&e.source==='Crypto F&G'){
+      const m=(e.raw_text||'').match(/(\d+)\/100/);
+      if(m)cryptoFG={score:parseInt(m[1]),text:e.raw_text};
+    }
+    if(!cboePC&&e.source==='CBOE P/C'){
+      const m=(e.raw_text||'').match(/= ([\d.]+)/);
+      if(m)cboePC={ratio:parseFloat(m[1]),text:e.raw_text};
+    }
+    if(cnnFG&&cryptoFG&&cboePC)break;
+  }
+
+  let html='';
+
+  // Price cards
+  for(const p of Object.values(latestPrices)){
+    const up=!p.change.startsWith('-');
+    html+=`<div class="pr"><div><div class="sym">${p.sym}</div><div class="det">H:${p.hi} L:${p.lo} @ ${p.time}</div></div><div style="text-align:right"><div class="val ${up?'up':'dn'}">$${p.price}</div><div class="chg ${up?'up':'dn'}">${p.change}</div></div></div>`;
+  }
+
+  // Sentiment gauges
+  if(cnnFG){
+    const col=cnnFG.score>60?'var(--green)':cnnFG.score<40?'var(--red)':'var(--yellow)';
+    html+=`<div class="gauge"><div class="label">CNN FEAR & GREED</div><div class="bar"><div class="fill" style="width:${cnnFG.score}%;background:${col}"></div></div><div class="val" style="color:${col}">${cnnFG.score}/100</div></div>`;
+  }
+  if(cryptoFG){
+    const col=cryptoFG.score>60?'var(--green)':cryptoFG.score<40?'var(--red)':'var(--yellow)';
+    html+=`<div class="gauge"><div class="label">CRYPTO FEAR & GREED</div><div class="bar"><div class="fill" style="width:${cryptoFG.score}%;background:${col}"></div></div><div class="val" style="color:${col}">${cryptoFG.score}/100</div></div>`;
+  }
+  if(cboePC){
+    const pct=Math.min(cboePC.ratio*50,100);
+    const col=cboePC.ratio>1.0?'var(--red)':cboePC.ratio<0.7?'var(--green)':'var(--yellow)';
+    html+=`<div class="gauge"><div class="label">CBOE PUT/CALL RATIO</div><div class="bar"><div class="fill" style="width:${pct}%;background:${col}"></div></div><div class="val" style="color:${col}">${cboePC.ratio.toFixed(2)}</div></div>`;
+  }
+
+  // Recent price ticks
+  html+='<div style="margin-top:6px;font-size:7px;color:var(--text-dim);padding:2px 4px;letter-spacing:1px">PRICE TICKS</div>';
+  for(const p of prices.slice(0,20)){
+    const time=new Date(p.ts).toLocaleTimeString();
+    const up=!(p.raw_text||'').includes('-');
+    html+=`<div class="ev" style="border-left-color:${up?'var(--green)':'var(--red)'}"><div class="m"><span class="t">${time}</span></div><div class="tx">${p.raw_text||''}</div></div>`;
+  }
+
+  document.getElementById('rl').innerHTML=html;
+  document.getElementById('pc').textContent=`${prices.length} ticks`;
+}
+
+// FAST polling: 2s events, 8s status
+setInterval(updateEvents,2000);
+setInterval(updateStatus,8000);
 updateStatus();
 updateEvents();
 </script>

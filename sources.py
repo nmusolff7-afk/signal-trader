@@ -883,7 +883,7 @@ class CoinGeckoSource(BaseSource):
       - E090: Network transaction volume surge
     """
     name = "CoinGecko"
-    interval_seconds = 300.0  # Every 5 minutes
+    interval_seconds = 60.0  # Every 5 minutes
 
     COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
 
@@ -965,7 +965,7 @@ class BlsSource(BaseSource):
     FREE. Key optional but recommended (25 → 500 req/day).
     """
     name = "BLS"
-    interval_seconds = 1800.0  # every 30 min (data releases monthly)
+    interval_seconds = 600.0  # every 30 min (data releases monthly)
 
     # BLS series IDs
     SERIES = {
@@ -1063,7 +1063,7 @@ class FdaMedwatchSource(BaseSource):
     FREE. No API key required.
     """
     name = "FDA MedWatch"
-    interval_seconds = 900.0  # every 15 min
+    interval_seconds = 300.0  # every 15 min
 
     RECALL_RSS = "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/recalls/rss.xml"
     ENFORCEMENT_API = "https://api.fda.gov/drug/enforcement.json?sort=report_date:desc&limit=5"
@@ -1144,7 +1144,7 @@ class SecEnforcementSource(BaseSource):
     FREE. No API key required.
     """
     name = "SEC Enforcement"
-    interval_seconds = 1200.0  # every 20 min
+    interval_seconds = 300.0  # every 20 min
 
     FEEDS = {
         "litigation": "https://www.sec.gov/rss/litigation/litreleases.xml",
@@ -1196,7 +1196,7 @@ class NoaaSpaceWeatherSource(BaseSource):
     FREE. No API key required.
     """
     name = "NOAA Space Weather"
-    interval_seconds = 900.0  # every 15 min
+    interval_seconds = 300.0  # every 15 min
 
     KP_URL = "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
 
@@ -1275,7 +1275,7 @@ class EdgarFilingSource(BaseSource):
     Uses the free EFTS search endpoint — no key needed.
     """
     name = "EDGAR Filings"
-    interval_seconds = 120.0  # every 2 min
+    interval_seconds = 60.0  # every 2 min
 
     SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
     FULL_TEXT_URL = "https://efts.sec.gov/LATEST/search-index"
@@ -1568,7 +1568,7 @@ class TreasuryAuctionSource(BaseSource):
     FREE. No API key required.
     """
     name = "Treasury Auction"
-    interval_seconds = 300.0  # every 5 min
+    interval_seconds = 120.0  # every 5 min
 
     API_URL = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query"
 
@@ -1632,7 +1632,7 @@ class CftcCotSource(BaseSource):
     FREE. No API key required.
     """
     name = "CFTC COT"
-    interval_seconds = 3600.0  # hourly (data is weekly, Fri 3:30pm)
+    interval_seconds = 1800.0  # hourly (data is weekly, Fri 3:30pm)
 
     COT_URL = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
 
@@ -1719,7 +1719,7 @@ class NwsSevereWeatherSource(BaseSource):
     FREE. No API key required.
     """
     name = "NWS Weather"
-    interval_seconds = 300.0  # every 5 min
+    interval_seconds = 120.0  # every 5 min
 
     ALERTS_URL = "https://api.weather.gov/alerts/active"
 
@@ -1786,7 +1786,7 @@ class NhcTropicalSource(BaseSource):
     FREE. No API key required. Seasonal Jun–Nov.
     """
     name = "NHC Tropical"
-    interval_seconds = 900.0  # every 15 min
+    interval_seconds = 300.0  # every 15 min
 
     FEEDS = {
         "atlantic": "https://www.nhc.noaa.gov/index-at.xml",
@@ -1831,7 +1831,7 @@ class FercEnergySource(BaseSource):
     FREE. No API key required.
     """
     name = "FERC Energy"
-    interval_seconds = 600.0  # every 10 min
+    interval_seconds = 300.0  # every 10 min
 
     RSS_URL = "https://www.ferc.gov/rss/newsroom/ferc-news.rss"
 
@@ -1871,7 +1871,7 @@ class SecForm4Source(BaseSource):
     FREE. No API key required.
     """
     name = "SEC Form 4"
-    interval_seconds = 120.0  # every 2 min
+    interval_seconds = 60.0  # every 2 min
 
     EFTS_URL = "https://efts.sec.gov/LATEST/search-index"
 
@@ -1969,7 +1969,7 @@ class PolymarketSource(BaseSource):
     FREE. No API key required for reads.
     """
     name = "Polymarket"
-    interval_seconds = 60.0  # every 1 min
+    interval_seconds = 30.0  # every 1 min
 
     API_URL = "https://gamma-api.polymarket.com/markets"
 
@@ -2076,7 +2076,7 @@ class FredSource(BaseSource):
     FREE with registered key (120 req/min).
     """
     name = "FRED"
-    interval_seconds = 1800.0  # every 30 min
+    interval_seconds = 900.0  # every 30 min
 
     API_URL = "https://api.stlouisfed.org/fred/series/observations"
 
@@ -2165,7 +2165,7 @@ class FredSource(BaseSource):
 class MisoGridSource(BaseSource):
     """MISO grid: 5-min LMPs + fuel mix. Zero auth."""
     name = "MISO Grid"
-    interval_seconds = 300.0
+    interval_seconds = 120.0
 
     LMP_URL = "https://api.misoenergy.org/MISORTWDBIReporter/Reporter.asmx?messageType=currentinterval&returnType=json"
     FUEL_URL = "https://api.misoenergy.org/MISORTWDDataBroker/DataBrokerServices.asmx?messageType=getfuelmix&returnType=json"
@@ -2223,7 +2223,7 @@ class MisoGridSource(BaseSource):
 class NrcReactorSource(BaseSource):
     """NRC event notifications + reactor status RSS. No auth."""
     name = "NRC Reactor"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     EVENT_RSS = "https://www.nrc.gov/public-involve/rss?feed=event"
     NEWS_RSS = "https://www.nrc.gov/public-involve/rss?feed=news"
@@ -2258,7 +2258,7 @@ class NrcReactorSource(BaseSource):
 class WhiteHouseSource(BaseSource):
     """White House presidential actions + briefings RSS. No auth."""
     name = "White House"
-    interval_seconds = 120.0  # every 2 min
+    interval_seconds = 60.0  # every 2 min
 
     FEEDS = {
         "actions": "https://www.whitehouse.gov/presidential-actions/feed/",
@@ -2293,7 +2293,7 @@ class WhiteHouseSource(BaseSource):
 class FaaNasSource(BaseSource):
     """FAA NAS airport status — ground stops, delays. No auth."""
     name = "FAA NAS"
-    interval_seconds = 120.0
+    interval_seconds = 60.0
 
     API_URL = "https://nasstatus.faa.gov/api/airport-status-information"
     LEGACY_URL = "https://soa.smext.faa.gov/asws/api/airport/delays"
@@ -2354,7 +2354,7 @@ class FaaNasSource(BaseSource):
 class CbpBorderSource(BaseSource):
     """CBP border wait times — commercial delays at US-Mexico ports. No auth."""
     name = "CBP Border"
-    interval_seconds = 900.0  # every 15 min
+    interval_seconds = 300.0  # every 15 min
 
     API_URL = "https://bwt.cbp.gov/api/waittimes"
 
@@ -2403,7 +2403,7 @@ class CbpBorderSource(BaseSource):
 class WhoOutbreakSource(BaseSource):
     """WHO Disease Outbreak News — pandemic early warning. No auth."""
     name = "WHO Outbreak"
-    interval_seconds = 1800.0  # every 30 min
+    interval_seconds = 900.0  # every 30 min
 
     API_URL = "https://www.who.int/api/news/diseaseoutbreaknews"
 
@@ -2491,7 +2491,7 @@ class FinraAtsSource(BaseSource):
 class DydxSource(BaseSource):
     """dYdX v4 perpetual markets — funding, OI, volume. No auth."""
     name = "dYdX"
-    interval_seconds = 60.0
+    interval_seconds = 30.0
 
     MARKETS_URL = "https://indexer.dydx.trade/v4/perpetualMarkets"
 
@@ -2554,7 +2554,7 @@ class DydxSource(BaseSource):
 class MempoolSource(BaseSource):
     """Bitcoin mempool fees + difficulty adjustment. No auth."""
     name = "Mempool"
-    interval_seconds = 30.0
+    interval_seconds = 15.0
 
     FEES_URL = "https://mempool.space/api/v1/fees/recommended"
     DIFF_URL = "https://mempool.space/api/v1/difficulty-adjustment"
@@ -2615,7 +2615,7 @@ class MempoolSource(BaseSource):
 class GdeltDocSource(BaseSource):
     """GDELT DOC 2.0 — global event sentiment monitoring. No auth."""
     name = "GDELT"
-    interval_seconds = 900.0  # every 15 min
+    interval_seconds = 300.0  # every 15 min
 
     API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 
@@ -2690,7 +2690,7 @@ class GdeltDocSource(BaseSource):
 class BoeSource(BaseSource):
     """Bank of England news/speeches RSS + Bank Rate CSV. No auth."""
     name = "BoE"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     NEWS_RSS = "https://www.bankofengland.co.uk/rss/news"
     SPEECHES_RSS = "https://www.bankofengland.co.uk/rss/speeches"
@@ -2723,7 +2723,7 @@ class BoeSource(BaseSource):
 class FedRegPrePubSource(BaseSource):
     """Federal Register pre-publication documents — 15h early window. No auth."""
     name = "FedReg PrePub"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     API_URL = "https://www.federalregister.gov/api/v1/public-inspection-documents/current.json"
 
@@ -2769,7 +2769,7 @@ class FedRegPrePubSource(BaseSource):
 class CongressSource(BaseSource):
     """Congress.gov — recent bills, hearings, nominations. Free key."""
     name = "Congress"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     BILLS_URL = "https://api.congress.gov/v3/bill"
     HEARINGS_URL = "https://api.congress.gov/v3/committee-meeting"
@@ -2852,7 +2852,7 @@ class CongressSource(BaseSource):
 class NasaFirmsSource(BaseSource):
     """NASA FIRMS — satellite fire detection near energy infrastructure. Free key."""
     name = "NASA FIRMS"
-    interval_seconds = 300.0  # every 5 min
+    interval_seconds = 120.0  # every 5 min
 
     # Area query for key energy regions (US Gulf Coast + Permian Basin)
     # Format: west,south,east,north
@@ -2931,7 +2931,7 @@ class NasaFirmsSource(BaseSource):
 class GieAgsiSource(BaseSource):
     """GIE AGSI+ — European gas storage levels. Free key via x-key header."""
     name = "GIE AGSI"
-    interval_seconds = 3600.0  # hourly (data is daily)
+    interval_seconds = 1800.0  # hourly (data is daily)
 
     API_URL = "https://agsi.gie.eu/api"
 
@@ -3005,7 +3005,7 @@ class OpenSkySource(BaseSource):
     Free registered account (4000 credits/day).
     """
     name = "OpenSky"
-    interval_seconds = 30.0
+    interval_seconds = 15.0
 
     API_URL = "https://opensky-network.org/api/states/all"
 
@@ -3136,7 +3136,7 @@ class ErcotSource(BaseSource):
     Free registration required for subscription key.
     """
     name = "ERCOT"
-    interval_seconds = 300.0  # every 5 min
+    interval_seconds = 120.0  # every 5 min
 
     BASE_URL = "https://api.ercot.com/api/public-reports"
 
@@ -3262,7 +3262,7 @@ class ErcotSource(BaseSource):
 class OfacSanctionsSource(BaseSource):
     """OFAC SDN list — sanctions as trading signal. No auth."""
     name = "OFAC Sanctions"
-    interval_seconds = 300.0
+    interval_seconds = 120.0
 
     SDN_URL = "https://www.treasury.gov/ofac/downloads/sdn.csv"
 
@@ -3323,7 +3323,7 @@ class OfacSanctionsSource(BaseSource):
 class CaisoSource(BaseSource):
     """CAISO California grid — 5-min LMPs as nat gas demand proxy. No auth."""
     name = "CAISO"
-    interval_seconds = 300.0
+    interval_seconds = 120.0
 
     # Use the simpler today's outlook endpoint
     OUTLOOK_URL = "http://www.caiso.com/outlook/SP/fuelsource.csv"
@@ -3378,7 +3378,7 @@ class CaisoSource(BaseSource):
 class EiaNatGasSource(BaseSource):
     """EIA weekly natural gas storage report. Uses existing EIA key."""
     name = "EIA NatGas"
-    interval_seconds = 1800.0
+    interval_seconds = 900.0
 
     API_URL = "https://api.eia.gov/v2/natural-gas/stor/wkly/data/"
 
@@ -3426,7 +3426,7 @@ class EiaNatGasSource(BaseSource):
 class BojSource(BaseSource):
     """Bank of Japan — monetary policy RSS. No auth."""
     name = "BOJ"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     RSS_URL = "https://www.boj.or.jp/en/rss/whatsnew.xml"
 
@@ -3457,7 +3457,7 @@ class BojSource(BaseSource):
 class DojAntitrustSource(BaseSource):
     """DOJ Antitrust Division — criminal + civil filings. No auth."""
     name = "DOJ Antitrust"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     FEEDS = {
         "criminal": "https://www.justice.gov/media/1194211/dl?inline",
@@ -3493,7 +3493,7 @@ class DojAntitrustSource(BaseSource):
 class BocSource(BaseSource):
     """Bank of Canada — CAD/USD rate + policy RSS. No auth."""
     name = "BoC"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     RATE_URL = "https://www.bankofcanada.ca/valet/observations/FXCADUSD/json"
     RSS_URL = "https://www.bankofcanada.ca/feed/"
@@ -3548,7 +3548,7 @@ class BocSource(BaseSource):
 class CboePcRatioSource(BaseSource):
     """CBOE equity put/call ratio — contrarian sentiment. No auth."""
     name = "CBOE P/C"
-    interval_seconds = 3600.0
+    interval_seconds = 1800.0
 
     EQUITY_URL = "https://cdn.cboe.com/resources/options/volume_and_call_put_ratios/equitypc.csv"
 
@@ -3604,7 +3604,7 @@ class CboePcRatioSource(BaseSource):
 class DefiLlamaSource(BaseSource):
     """DeFi Llama — TVL + stablecoin supply + DEX volume. No auth."""
     name = "DeFi Llama"
-    interval_seconds = 1800.0
+    interval_seconds = 600.0
 
     STABLECOIN_URL = "https://stablecoins.llama.fi/stablecoins?includePrices=true"
     TVL_URL = "https://api.llama.fi/v2/historicalChainTvl"
@@ -3662,7 +3662,7 @@ class DefiLlamaSource(BaseSource):
 class HyperliquidSource(BaseSource):
     """Hyperliquid DEX — perpetual funding/OI/volume. No auth."""
     name = "Hyperliquid"
-    interval_seconds = 60.0
+    interval_seconds = 30.0
 
     API_URL = "https://api.hyperliquid.xyz/info"
     TRACKED = {"BTC", "ETH", "SOL"}
@@ -3720,7 +3720,7 @@ class HyperliquidSource(BaseSource):
 class SnbSource(BaseSource):
     """Swiss National Bank — monetary policy + adhoc alerts. No auth."""
     name = "SNB"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     FEEDS = {
         "monetary_policy": "https://www.snb.ch/public/en/rss/mopo",
@@ -3824,7 +3824,7 @@ class WikiPageviewSource(BaseSource):
 class FtcCompetitionSource(BaseSource):
     """FTC Competition enforcement — merger blocks, investigations. No auth."""
     name = "FTC"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     RSS_URL = "https://www.ftc.gov/feeds/press-release-competition.xml"
 
@@ -3855,7 +3855,7 @@ class FtcCompetitionSource(BaseSource):
 class NoaaCoopsSource(BaseSource):
     """NOAA CO-OPS water levels at key ports. No auth."""
     name = "NOAA Ports"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     API_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 
@@ -3924,7 +3924,7 @@ class NoaaCoopsSource(BaseSource):
 class EurostatSource(BaseSource):
     """Eurostat — Eurozone macro stats (HICP, GDP, unemployment). No auth."""
     name = "Eurostat"
-    interval_seconds = 3600.0
+    interval_seconds = 1800.0
 
     API_URL = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data"
 
@@ -3990,7 +3990,7 @@ class EurostatSource(BaseSource):
 class UsgsWaterSource(BaseSource):
     """USGS streamgage data — flood/drought detection. No auth."""
     name = "USGS Water"
-    interval_seconds = 900.0
+    interval_seconds = 300.0
 
     API_URL = "https://waterservices.usgs.gov/nwis/iv/"
 
@@ -4056,7 +4056,7 @@ class UsgsWaterSource(BaseSource):
 class UsdaLmprSource(BaseSource):
     """USDA livestock prices — food inflation leading indicator. No auth."""
     name = "USDA LMPR"
-    interval_seconds = 3600.0
+    interval_seconds = 1800.0
 
     API_URL = "https://mpr.datamart.ams.usda.gov/services/v1.1/reports"
 
@@ -4095,7 +4095,7 @@ class UsdaLmprSource(BaseSource):
 class BeaSource(BaseSource):
     """BEA — GDP, PCE Price Index, personal income. Free key."""
     name = "BEA"
-    interval_seconds = 1800.0
+    interval_seconds = 900.0
 
     API_URL = "https://apps.bea.gov/api/data"
 
@@ -4169,7 +4169,7 @@ class BeaSource(BaseSource):
 class CensusEitsSource(BaseSource):
     """Census EITS — housing starts, retail sales, durable goods. Free key."""
     name = "Census EITS"
-    interval_seconds = 1800.0
+    interval_seconds = 900.0
 
     ENDPOINTS = {
         "resconst": {"url": "https://api.census.gov/data/timeseries/eits/resconst", "label": "Housing Starts"},
@@ -4239,7 +4239,7 @@ class CensusEitsSource(BaseSource):
 class HackerNewsSource(BaseSource):
     """Hacker News top stories + market keyword search. No auth."""
     name = "Hacker News"
-    interval_seconds = 300.0
+    interval_seconds = 120.0
 
     ALGOLIA_URL = "https://hn.algolia.com/api/v1/search_by_date"
     KEYWORDS = ["SEC", "Federal Reserve", "tariff", "sanctions", "bank run", "crypto regulation", "OPEC", "recession"]
@@ -4282,7 +4282,7 @@ class HackerNewsSource(BaseSource):
 class NifcWildfireSource(BaseSource):
     """NIFC active wildfire perimeters — size, region, name. No auth."""
     name = "NIFC Wildfire"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     API_URL = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Public_Wildfire_Perimeters_View/FeatureServer/0/query"
 
@@ -4319,7 +4319,7 @@ class NifcWildfireSource(BaseSource):
 class NasaEonetSource(BaseSource):
     """NASA EONET — global natural events (fires, volcanoes, storms). No auth."""
     name = "NASA EONET"
-    interval_seconds = 900.0
+    interval_seconds = 300.0
 
     API_URL = "https://eonet.gsfc.nasa.gov/api/v3/events"
 
@@ -4355,7 +4355,7 @@ class NasaEonetSource(BaseSource):
 class ReliefWebSource(BaseSource):
     """ReliefWeb — UN-curated conflict and disaster intelligence. No auth."""
     name = "ReliefWeb"
-    interval_seconds = 900.0
+    interval_seconds = 300.0
 
     API_URL = "https://api.reliefweb.int/v1/reports"
 
@@ -4393,7 +4393,7 @@ class ReliefWebSource(BaseSource):
 class CelesTrakSource(BaseSource):
     """CelesTrak — satellite catalog, Starlink, GPS, military recon. No auth."""
     name = "CelesTrak"
-    interval_seconds = 7200.0  # every 2 hours
+    interval_seconds = 3600.0  # every 2 hours
 
     API_URL = "https://celestrak.org/NORAD/elements/gp.php"
 
@@ -4433,7 +4433,7 @@ class CelesTrakSource(BaseSource):
 class NoaaBuoySource(BaseSource):
     """NOAA NDBC ocean buoys — wind, waves, pressure at key locations. No auth."""
     name = "NOAA Buoys"
-    interval_seconds = 1800.0
+    interval_seconds = 900.0
 
     STATIONS = {
         "42001": "Gulf of Mexico Central",
@@ -4498,7 +4498,7 @@ class NoaaBuoySource(BaseSource):
 class UsgsVolcanoSource(BaseSource):
     """USGS Volcano Hazards — elevated alert levels. No auth."""
     name = "USGS Volcano"
-    interval_seconds = 1800.0
+    interval_seconds = 600.0
 
     API_URL = "https://volcanoes.usgs.gov/hans-public/api/volcano/getElevatedVolcanoes"
 
@@ -4537,7 +4537,7 @@ class UsgsVolcanoSource(BaseSource):
 class BbcNewsSource(BaseSource):
     """BBC News RSS — top stories, world, business. No auth."""
     name = "BBC News"
-    interval_seconds = 300.0
+    interval_seconds = 120.0
 
     FEEDS = {
         "top": "https://feeds.bbci.co.uk/news/rss.xml",
@@ -4573,7 +4573,7 @@ class BbcNewsSource(BaseSource):
 class UkCarbonSource(BaseSource):
     """UK Carbon Intensity — grid generation mix by fuel. No auth."""
     name = "UK Carbon"
-    interval_seconds = 1800.0
+    interval_seconds = 900.0
 
     GEN_URL = "https://api.carbonintensity.org.uk/generation"
     INTENSITY_URL = "https://api.carbonintensity.org.uk/intensity"
@@ -4614,7 +4614,7 @@ class UkCarbonSource(BaseSource):
 class CopernicusEmsSource(BaseSource):
     """Copernicus EMS — satellite damage assessment for global disasters. No auth."""
     name = "Copernicus EMS"
-    interval_seconds = 3600.0
+    interval_seconds = 1800.0
 
     API_URL = "https://mapping.emergency.copernicus.eu/activations/api/activations/"
 
@@ -4655,7 +4655,7 @@ class CopernicusEmsSource(BaseSource):
 class AlJazeeraSource(BaseSource):
     """Al Jazeera RSS — Middle East, Africa, Asia news. No auth."""
     name = "Al Jazeera"
-    interval_seconds = 600.0
+    interval_seconds = 300.0
 
     RSS_URL = "https://www.aljazeera.com/xml/rss/all.xml"
 
@@ -4686,7 +4686,7 @@ class AlJazeeraSource(BaseSource):
 class DroughtMonitorSource(BaseSource):
     """US Drought Monitor — D0-D4 severity for grain/energy impact. No auth."""
     name = "US Drought"
-    interval_seconds = 7200.0  # every 2 hours (data is weekly Thursday)
+    interval_seconds = 3600.0  # every 2 hours (data is weekly Thursday)
 
     API_URL = "https://usdmdataservices.unl.edu/api/USStatistics/GetDroughtSeverityStatisticsByArea"
 
@@ -4735,7 +4735,7 @@ class DroughtMonitorSource(BaseSource):
 class AisStreamSource(BaseSource):
     """AISStream — vessel positions near key energy chokepoints. Free key."""
     name = "AISStream"
-    interval_seconds = 60.0
+    interval_seconds = 30.0
 
     # REST search endpoint for vessels in bounding boxes
     API_URL = "https://api.aisstream.io/v0/search"
@@ -4810,7 +4810,7 @@ class AisStreamSource(BaseSource):
 class AirNowSource(BaseSource):
     """AirNow — AQI readings at key US locations. Free key."""
     name = "AirNow"
-    interval_seconds = 3600.0  # hourly
+    interval_seconds = 1800.0  # hourly
 
     API_URL = "https://www.airnowapi.org/aq/observation/latLong/current/"
 
@@ -4886,7 +4886,7 @@ class AirNowSource(BaseSource):
 class AcledSource(BaseSource):
     """ACLED — geolocated conflict events worldwide. OAuth2 token auth."""
     name = "ACLED"
-    interval_seconds = 3600.0  # hourly (data is weekly)
+    interval_seconds = 1800.0  # hourly (data is weekly)
 
     TOKEN_URL = "https://acleddata.com/oauth/token"
     API_URL = "https://acleddata.com/api/acled/read"
@@ -4991,7 +4991,7 @@ class AcledSource(BaseSource):
 class CnnFearGreedSource(BaseSource):
     """CNN Fear & Greed — 7-component equity sentiment (0-100). No auth."""
     name = "CNN Fear&Greed"
-    interval_seconds = 900.0
+    interval_seconds = 300.0
 
     async def poll(self) -> None:
         try:
@@ -5030,7 +5030,7 @@ class CnnFearGreedSource(BaseSource):
 class StockTwitsSource(BaseSource):
     """StockTwits — pre-labeled bull/bear messages per ticker. No auth."""
     name = "StockTwits"
-    interval_seconds = 120.0
+    interval_seconds = 60.0
 
     API_URL = "https://api.stocktwits.com/api/2/streams/symbol"
     TICKERS = ["SPY", "QQQ", "AAPL", "TSLA", "NVDA", "BTC.X", "ETH.X"]
@@ -5081,7 +5081,7 @@ class StockTwitsSource(BaseSource):
 class FourChanBizSource(BaseSource):
     """4chan /biz/ — anonymous crypto/retail sentiment. No auth."""
     name = "4chan /biz/"
-    interval_seconds = 300.0
+    interval_seconds = 120.0
 
     CATALOG_URL = "https://a.4cdn.org/biz/catalog.json"
 
@@ -5137,7 +5137,7 @@ class FourChanBizSource(BaseSource):
 class CryptoFearGreedSource(BaseSource):
     """Alternative.me Crypto Fear & Greed — daily BTC sentiment. No auth."""
     name = "Crypto F&G"
-    interval_seconds = 3600.0
+    interval_seconds = 1800.0
 
     API_URL = "https://api.alternative.me/fng/?limit=1"
 
@@ -5185,7 +5185,7 @@ class CryptoFearGreedSource(BaseSource):
 class SentiCryptSource(BaseSource):
     """SentiCrypt — BTC Twitter NLP sentiment scores. No auth."""
     name = "SentiCrypt"
-    interval_seconds = 7200.0  # every 2 hours (matches update frequency)
+    interval_seconds = 3600.0  # every 2 hours (matches update frequency)
 
     API_URL = "https://api.senticrypt.com/v2/latest.json"
 
@@ -5234,7 +5234,7 @@ class SentiCryptSource(BaseSource):
 class KalshiSource(BaseSource):
     """Kalshi — real-money regulated event contracts (CPI, GDP, Fed, weather). No auth."""
     name = "Kalshi"
-    interval_seconds = 120.0
+    interval_seconds = 60.0
 
     API_URL = "https://api.elections.kalshi.com/trade-api/v2/markets"
 
@@ -5288,7 +5288,7 @@ class KalshiSource(BaseSource):
 class MetaculusSource(BaseSource):
     """Metaculus — calibrated crowd forecasts on geopolitics/economics. No auth."""
     name = "Metaculus"
-    interval_seconds = 1800.0
+    interval_seconds = 600.0
 
     API_URL = "https://www.metaculus.com/api2/questions/"
 
@@ -5349,7 +5349,7 @@ class MetaculusSource(BaseSource):
 class PredictItSource(BaseSource):
     """PredictIt — US political market prices. No auth."""
     name = "PredictIt"
-    interval_seconds = 300.0
+    interval_seconds = 120.0
 
     API_URL = "https://www.predictit.org/api/marketdata/all/"
 
@@ -5398,7 +5398,7 @@ class PredictItSource(BaseSource):
 class ManifoldSource(BaseSource):
     """Manifold Markets — prediction markets on breaking events. No auth."""
     name = "Manifold"
-    interval_seconds = 120.0
+    interval_seconds = 60.0
 
     API_URL = "https://api.manifold.markets/v0/markets"
 
@@ -5451,7 +5451,7 @@ class ManifoldSource(BaseSource):
 class FinnhubSource(BaseSource):
     """Finnhub — news sentiment + social sentiment + insider MSPR. Free key."""
     name = "Finnhub"
-    interval_seconds = 300.0
+    interval_seconds = 120.0
 
     BASE_URL = "https://finnhub.io/api/v1"
     TICKERS = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN"]

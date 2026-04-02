@@ -167,17 +167,25 @@ def get_status():
 
 
 @app.get("/api/events")
-def get_events(limit: int = 100):
-    """Last N raw events from the database."""
+def get_events(limit: int = 100, since_id: int = 0):
+    """Last N raw events, or only events newer than since_id for incremental fetching."""
     conn = get_db()
     if not conn:
-        return {"events": []}
+        return {"events": [], "latest_id": 0}
     try:
-        rows = conn.execute("""
-            SELECT id, ts, source, raw_text, event_id, confidence, tradeable
-            FROM raw_events ORDER BY id DESC LIMIT ?
-        """, (limit,)).fetchall()
-        return {"events": [dict(r) for r in rows]}
+        if since_id > 0:
+            rows = conn.execute("""
+                SELECT id, ts, source, raw_text, event_id, confidence, tradeable
+                FROM raw_events WHERE id > ? ORDER BY id DESC LIMIT ?
+            """, (since_id, limit)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT id, ts, source, raw_text, event_id, confidence, tradeable
+                FROM raw_events ORDER BY id DESC LIMIT ?
+            """, (limit,)).fetchall()
+        events = [dict(r) for r in rows]
+        latest_id = events[0]["id"] if events else since_id
+        return {"events": events, "latest_id": latest_id}
     finally:
         conn.close()
 
