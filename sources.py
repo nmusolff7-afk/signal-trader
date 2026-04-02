@@ -1471,6 +1471,697 @@ class KrakenPriceSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# USGS EARTHQUAKE FEED (REAL)
+# Endpoint: earthquake.usgs.gov GeoJSON
+# FREE, no key. Significant earthquakes within minutes of detection.
+# ═══════════════════════════════════════════════════════
+
+class UsgsEarthquakeSource(BaseSource):
+    """
+    Polls USGS significant earthquake feed. M5.5+ near oil regions
+    or undersea cable corridors = supply-side shock signal.
+    FREE. No API key required.
+    """
+    name = "USGS Earthquake"
+    interval_seconds = 30.0
+
+    FEED_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_hour.geojson"
+    # Fallback to larger window if hourly is empty
+    FEED_DAY_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson"
+
+    # Oil-producing regions (lat/lon bounding boxes)
+    OIL_REGIONS = {
+        "MENA": {"lat": (15, 42), "lon": (25, 65)},
+        "Venezuela": {"lat": (0, 13), "lon": (-75, -59)},
+        "Gulf of Mexico": {"lat": (18, 31), "lon": (-98, -80)},
+        "Nigeria": {"lat": (2, 14), "lon": (2, 15)},
+    }
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Try significant_hour first, fall back to 4.5_day
+                for url in [self.FEED_URL, self.FEED_DAY_URL]:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+                        features = data.get("features", [])
+                        if features:
+                            break
+
+                for quake in features[:10]:
+                    props = quake.get("properties", {})
+                    geom = quake.get("geometry", {})
+                    coords = geom.get("coordinates", [0, 0, 0])
+
+                    qid = quake.get("id", "")
+                    if not qid or self._already_seen(qid):
+                        continue
+
+                    mag = float(props.get("mag", 0))
+                    place = props.get("place", "Unknown")
+                    lon, lat = coords[0], coords[1]
+
+                    # Check proximity to oil regions
+                    region_hit = None
+                    for region, bounds in self.OIL_REGIONS.items():
+                        if bounds["lat"][0] <= lat <= bounds["lat"][1] and bounds["lon"][0] <= lon <= bounds["lon"][1]:
+                            region_hit = region
+                            break
+
+                    alert = props.get("alert", "")  # green/yellow/orange/red
+                    tsunami = props.get("tsunami", 0)
+
+                    text = f"USGS: M{mag:.1f} earthquake — {place}"
+                    if region_hit:
+                        text += f" [OIL REGION: {region_hit}]"
+                    if tsunami:
+                        text += " [TSUNAMI WARNING]"
+
+                    await self.emit({
+                        "text": text,
+                        "magnitude": mag,
+                        "place": place,
+                        "lat": lat,
+                        "lon": lon,
+                        "oil_region": region_hit,
+                        "alert_level": alert,
+                        "tsunami": tsunami,
+                        "extra_json": json.dumps({
+                            "quake_id": qid,
+                            "magnitude": mag,
+                            "place": place,
+                            "oil_region": region_hit,
+                            "alert": alert,
+                        }),
+                    })
+
+        except Exception as e:
+            log.warning("[USGS Earthquake] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# TREASURY AUCTION API (REAL)
+# Endpoint: api.fiscaldata.treasury.gov
+# FREE, no key. Auction results (bid-to-cover, high yield, tail).
+# ═══════════════════════════════════════════════════════
+
+class TreasuryAuctionSource(BaseSource):
+    """
+    Polls Treasury auction results from FiscalData API.
+    Weak demand (low bid-to-cover, large tail) moves rates and equities.
+    FREE. No API key required.
+    """
+    name = "Treasury Auction"
+    interval_seconds = 300.0  # every 5 min
+
+    API_URL = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query"
+
+    async def poll(self) -> None:
+        try:
+            today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+            week_ago = (datetime.datetime.utcnow() - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+
+            params = {
+                "filter": f"auction_date:gte:{week_ago}",
+                "sort": "-auction_date",
+                "page[size]": "10",
+                "fields": "security_type,security_term,auction_date,high_yield,bid_to_cover_ratio,total_accepted,total_tendered",
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+                for record in data.get("data", []):
+                    auction_date = record.get("auction_date", "")
+                    sec_type = record.get("security_type", "")
+                    sec_term = record.get("security_term", "")
+                    high_yield = record.get("high_yield", "")
+                    btc_ratio = record.get("bid_to_cover_ratio", "")
+
+                    key = f"auction-{auction_date}-{sec_type}-{sec_term}"
+                    if self._already_seen(key):
+                        continue
+
+                    text = f"Treasury: {sec_type} {sec_term} auction — yield {high_yield}%"
+                    if btc_ratio:
+                        text += f", bid-to-cover {btc_ratio}"
+
+                    await self.emit({
+                        "text": text,
+                        "security_type": sec_type,
+                        "security_term": sec_term,
+                        "auction_date": auction_date,
+                        "high_yield": high_yield,
+                        "bid_to_cover_ratio": btc_ratio,
+                        "extra_json": json.dumps(record),
+                    })
+
+        except Exception as e:
+            log.warning("[Treasury Auction] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# CFTC COMMITMENT OF TRADERS (REAL)
+# Endpoint: publicreporting.cftc.gov Socrata API
+# FREE, no key. Weekly COT positioning data.
+# ═══════════════════════════════════════════════════════
+
+class CftcCotSource(BaseSource):
+    """
+    Polls CFTC disaggregated COT report (Socrata API).
+    Extreme managed-money positioning historically precedes reversals.
+    FREE. No API key required.
+    """
+    name = "CFTC COT"
+    interval_seconds = 3600.0  # hourly (data is weekly, Fri 3:30pm)
+
+    COT_URL = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
+
+    # Markets we care about
+    TRACKED_MARKETS = {
+        "CRUDE OIL, LIGHT SWEET": "MCL",
+        "GOLD": "MGC",
+        "E-MINI S&P 500": "MES",
+        "EURO FX": "M6E",
+        "BITCOIN": "BTC",
+    }
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                params = {
+                    "$order": "report_date_as_yyyy_mm_dd DESC",
+                    "$limit": "20",
+                    "$where": "market_and_exchange_names in(" + ",".join(f"'{m}'" for m in self.TRACKED_MARKETS.keys()) + ")",
+                }
+
+                async with session.get(self.COT_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+                for record in data:
+                    market = record.get("market_and_exchange_names", "")
+                    report_date = record.get("report_date_as_yyyy_mm_dd", "")
+                    # Clean market name — CFTC adds exchange suffix
+                    market_clean = market.split(" - ")[0].strip()
+
+                    key = f"cot-{market_clean}-{report_date}"
+                    if self._already_seen(key):
+                        continue
+
+                    asset = None
+                    for tracked, label in self.TRACKED_MARKETS.items():
+                        if tracked in market_clean.upper():
+                            asset = label
+                            break
+
+                    # Managed money net position
+                    mm_long = int(record.get("m_money_positions_long_all", 0) or 0)
+                    mm_short = int(record.get("m_money_positions_short_all", 0) or 0)
+                    mm_net = mm_long - mm_short
+
+                    # Commercial hedgers
+                    comm_long = int(record.get("prod_merc_positions_long_all", 0) or 0)
+                    comm_short = int(record.get("prod_merc_positions_short_all", 0) or 0)
+                    comm_net = comm_long - comm_short
+
+                    direction = "net-long" if mm_net > 0 else "net-short"
+
+                    await self.emit({
+                        "text": f"CFTC COT: {market_clean} — Managed Money {direction} {abs(mm_net):,} contracts (report {report_date})",
+                        "market": market_clean,
+                        "asset": asset,
+                        "managed_money_net": mm_net,
+                        "commercial_net": comm_net,
+                        "report_date": report_date,
+                        "extra_json": json.dumps({
+                            "market": market_clean,
+                            "mm_net": mm_net,
+                            "comm_net": comm_net,
+                            "report_date": report_date,
+                        }),
+                    })
+
+        except Exception as e:
+            log.warning("[CFTC COT] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# NWS SEVERE WEATHER ALERTS (REAL)
+# Endpoint: api.weather.gov/alerts/active
+# FREE, no key. Active tornado, blizzard, extreme cold alerts.
+# ═══════════════════════════════════════════════════════
+
+class NwsSevereWeatherSource(BaseSource):
+    """
+    Polls NWS active weather alerts. Extreme cold → nat gas spike,
+    Gulf storms → crude disruption, tornado clusters → grain impact.
+    FREE. No API key required.
+    """
+    name = "NWS Weather"
+    interval_seconds = 300.0  # every 5 min
+
+    ALERTS_URL = "https://api.weather.gov/alerts/active"
+
+    # Severity levels we care about
+    SEVERE_EVENTS = {
+        "Tornado Warning", "Tornado Watch",
+        "Extreme Cold Warning", "Extreme Cold Watch",
+        "Blizzard Warning", "Ice Storm Warning",
+        "Hurricane Warning", "Hurricane Watch",
+        "Tropical Storm Warning",
+        "Storm Surge Warning",
+        "Excessive Heat Warning",
+        "Derecho",
+    }
+
+    async def poll(self) -> None:
+        try:
+            headers = {"User-Agent": "APEX Signal Trader research@apex.local", "Accept": "application/geo+json"}
+            async with aiohttp.ClientSession() as session:
+                params = {"status": "actual", "severity": "Extreme,Severe"}
+                async with session.get(self.ALERTS_URL, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+                for feature in data.get("features", [])[:20]:
+                    props = feature.get("properties", {})
+                    alert_id = props.get("id", "")
+                    if not alert_id or self._already_seen(alert_id):
+                        continue
+
+                    event = props.get("event", "")
+                    severity = props.get("severity", "")
+                    headline = props.get("headline", "")
+                    area = props.get("areaDesc", "")[:100]
+
+                    await self.emit({
+                        "text": f"NWS {severity}: {event} — {headline[:150]}",
+                        "event_type": event,
+                        "severity": severity,
+                        "area": area,
+                        "extra_json": json.dumps({
+                            "alert_id": alert_id,
+                            "event": event,
+                            "severity": severity,
+                            "area": area,
+                        }),
+                    })
+
+        except Exception as e:
+            log.warning("[NWS Weather] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# NHC TROPICAL WEATHER RSS (REAL)
+# Feed: nhc.noaa.gov — Atlantic + Eastern Pacific
+# FREE, no key. Seasonal Jun–Nov.
+# ═══════════════════════════════════════════════════════
+
+class NhcTropicalSource(BaseSource):
+    """
+    Polls NHC Atlantic tropical weather feed.
+    Gulf storms directly affect ~17% of US crude production.
+    FREE. No API key required. Seasonal Jun–Nov.
+    """
+    name = "NHC Tropical"
+    interval_seconds = 900.0  # every 15 min
+
+    FEEDS = {
+        "atlantic": "https://www.nhc.noaa.gov/index-at.xml",
+        "outlook": "https://www.nhc.noaa.gov/gtwo.xml",
+    }
+
+    async def poll(self) -> None:
+        loop = asyncio.get_event_loop()
+        for feed_name, url in self.FEEDS.items():
+            try:
+                feed = await loop.run_in_executor(None, feedparser.parse, url)
+                for entry in feed.entries[:10]:
+                    uid = entry.get("id") or entry.get("link", "")
+                    if self._already_seen(uid):
+                        continue
+
+                    title = entry.get("title", "")
+                    summary = entry.get("summary", "")[:200]
+
+                    await self.emit({
+                        "text": f"NHC: {title}",
+                        "title": title,
+                        "summary": summary,
+                        "feed": feed_name,
+                        "link": entry.get("link", ""),
+                        "extra_json": json.dumps({"uid": uid, "feed": feed_name}),
+                    })
+            except Exception as e:
+                log.warning("[NHC Tropical] %s error: %s", feed_name, e)
+
+
+# ═══════════════════════════════════════════════════════
+# FERC ENERGY RSS (REAL)
+# Feed: ferc.gov newsroom RSS
+# FREE, no key. Pipeline curtailments, LNG terminal orders.
+# ═══════════════════════════════════════════════════════
+
+class FercEnergySource(BaseSource):
+    """
+    Polls FERC newsroom RSS for energy regulatory actions.
+    Emergency curtailment orders → NG futures. LNG terminal rulings → MCL.
+    FREE. No API key required.
+    """
+    name = "FERC Energy"
+    interval_seconds = 600.0  # every 10 min
+
+    RSS_URL = "https://www.ferc.gov/rss/newsroom/ferc-news.rss"
+
+    async def poll(self) -> None:
+        try:
+            loop = asyncio.get_event_loop()
+            feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
+            for entry in feed.entries[:10]:
+                uid = entry.get("id") or entry.get("link", "")
+                if self._already_seen(uid):
+                    continue
+
+                title = entry.get("title", "")
+                summary = entry.get("summary", "")[:200]
+                text = f"{title}. {summary}".strip()
+
+                await self.emit({
+                    "text": f"FERC: {text[:200]}",
+                    "title": title,
+                    "link": entry.get("link", ""),
+                    "extra_json": json.dumps({"uid": uid}),
+                })
+        except Exception as e:
+            log.warning("[FERC Energy] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# SEC FORM 4 INSIDER TRADES (REAL)
+# Endpoint: efts.sec.gov — sub-second updates vs 10-min RSS
+# FREE, no key. Cluster filings = highest-precision insider signal.
+# ═══════════════════════════════════════════════════════
+
+class SecForm4Source(BaseSource):
+    """
+    Polls SEC EFTS for Form 4 insider transaction filings.
+    Cluster buys (CEO + CFO within 48h) = high conviction signal.
+    FREE. No API key required.
+    """
+    name = "SEC Form 4"
+    interval_seconds = 120.0  # every 2 min
+
+    EFTS_URL = "https://efts.sec.gov/LATEST/search-index"
+
+    async def poll(self) -> None:
+        try:
+            now = datetime.datetime.utcnow()
+            params = {
+                "q": "\"Statement of Changes in Beneficial Ownership\"",
+                "forms": "4",
+                "dateRange": "custom",
+                "startdt": (now - datetime.timedelta(hours=4)).strftime("%Y-%m-%d"),
+                "enddt": now.strftime("%Y-%m-%d"),
+            }
+            headers = {
+                "User-Agent": "APEX Signal Trader research@apex.local",
+                "Accept": "application/json",
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.EFTS_URL, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        # Fallback to RSS
+                        await self._poll_rss(session, headers)
+                        return
+
+                    data = await resp.json()
+                    for hit in data.get("hits", {}).get("hits", [])[:15]:
+                        source = hit.get("_source", {})
+                        fid = hit.get("_id", "")
+                        if self._already_seen(fid):
+                            continue
+
+                        names = source.get("display_names", [])
+                        company = names[0] if names else "Unknown"
+                        filed = source.get("file_date", "")
+                        desc = source.get("display_description", "")[:200]
+
+                        await self.emit({
+                            "text": f"SEC Form 4: {company} — {desc}",
+                            "company": company,
+                            "file_date": filed,
+                            "extra_json": json.dumps({
+                                "filing_id": fid,
+                                "company": company,
+                                "file_date": filed,
+                            }),
+                        })
+
+        except Exception as e:
+            log.warning("[SEC Form 4] Error: %s", e)
+
+    async def _poll_rss(self, session, headers):
+        """Fallback: current Form 4 filings via RSS."""
+        try:
+            url = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&dateb=&owner=only&count=20&search_text=&start=0&output=atom"
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return
+                text = await resp.text()
+
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(text)
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            for entry in root.findall("atom:entry", ns)[:15]:
+                title_el = entry.find("atom:title", ns)
+                uid_el = entry.find("atom:id", ns)
+                uid = uid_el.text if uid_el is not None else ""
+                if not uid or self._already_seen(uid):
+                    continue
+                title = title_el.text if title_el is not None else ""
+                link_el = entry.find("atom:link", ns)
+                link = link_el.get("href", "") if link_el is not None else ""
+
+                await self.emit({
+                    "text": f"SEC Form 4: {title}",
+                    "title": title,
+                    "link": link,
+                    "extra_json": json.dumps({"uid": uid, "source": "form4_rss"}),
+                })
+        except Exception as e:
+            log.warning("[SEC Form 4] RSS fallback error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# POLYMARKET PREDICTION MARKET (REAL)
+# Endpoint: gamma-api.polymarket.com
+# FREE, no key. Implied probability shifts on macro events.
+# ═══════════════════════════════════════════════════════
+
+class PolymarketSource(BaseSource):
+    """
+    Polls Polymarket for active prediction markets on Fed, CPI,
+    geopolitical events. 10-point probability shifts = institutional
+    repositioning signal.
+    FREE. No API key required for reads.
+    """
+    name = "Polymarket"
+    interval_seconds = 60.0  # every 1 min
+
+    API_URL = "https://gamma-api.polymarket.com/markets"
+
+    # Keywords for markets we care about
+    TRACKED_KEYWORDS = [
+        "fed", "rate", "cpi", "inflation", "recession",
+        "trump", "tariff", "war", "oil", "bitcoin", "btc",
+        "election", "default", "shutdown", "debt ceiling",
+    ]
+
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._last_prices = {}  # slug -> last price
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                params = {"active": "true", "closed": "false", "limit": "50", "order": "volume", "ascending": "false"}
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    markets = await resp.json()
+
+                for market in markets:
+                    slug = market.get("conditionId", "") or market.get("id", "")
+                    question = market.get("question", "")
+                    if not question:
+                        continue
+
+                    # Filter to relevant markets
+                    q_lower = question.lower()
+                    relevant = any(kw in q_lower for kw in self.TRACKED_KEYWORDS)
+                    if not relevant:
+                        continue
+
+                    # Get current probability
+                    outcome_prices = market.get("outcomePrices", "")
+                    if isinstance(outcome_prices, str):
+                        try:
+                            outcome_prices = json.loads(outcome_prices)
+                        except (json.JSONDecodeError, TypeError):
+                            continue
+
+                    if not outcome_prices or not isinstance(outcome_prices, list):
+                        continue
+
+                    yes_price = float(outcome_prices[0]) if outcome_prices else 0
+                    prob_pct = yes_price * 100
+
+                    # Detect significant moves
+                    last = self._last_prices.get(slug)
+                    self._last_prices[slug] = prob_pct
+
+                    if last is not None:
+                        delta = prob_pct - last
+                        if abs(delta) < 2.0:  # ignore small moves
+                            continue
+
+                        direction = "UP" if delta > 0 else "DOWN"
+                        text = f"Polymarket: \"{question[:80]}\" {direction} {abs(delta):.1f}pts → {prob_pct:.0f}%"
+
+                        await self.emit({
+                            "text": text,
+                            "question": question[:120],
+                            "probability": prob_pct,
+                            "delta": delta,
+                            "direction": direction,
+                            "extra_json": json.dumps({
+                                "slug": slug,
+                                "question": question[:120],
+                                "probability": round(prob_pct, 1),
+                                "delta": round(delta, 1),
+                            }),
+                        })
+                    else:
+                        # First observation — emit current state
+                        key = f"poly-init-{slug}"
+                        if not self._already_seen(key):
+                            await self.emit({
+                                "text": f"Polymarket: \"{question[:80]}\" at {prob_pct:.0f}%",
+                                "question": question[:120],
+                                "probability": prob_pct,
+                                "extra_json": json.dumps({
+                                    "slug": slug,
+                                    "question": question[:120],
+                                    "probability": round(prob_pct, 1),
+                                }),
+                            })
+
+        except Exception as e:
+            log.warning("[Polymarket] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# FRED API (St. Louis Fed) — REAL
+# Endpoint: api.stlouisfed.org/fred/series/observations
+# FREE with key. Treasury yields, SOFR, reverse repo, Fed balance sheet.
+# ═══════════════════════════════════════════════════════
+
+class FredSource(BaseSource):
+    """
+    Polls FRED for daily Treasury yields, SOFR, and RRP data.
+    Yield spikes, RRP drops, balance sheet changes = macro signals.
+    FREE with registered key (120 req/min).
+    """
+    name = "FRED"
+    interval_seconds = 1800.0  # every 30 min
+
+    API_URL = "https://api.stlouisfed.org/fred/series/observations"
+
+    SERIES = {
+        "DGS10":    "10Y Treasury Yield",
+        "DGS2":     "2Y Treasury Yield",
+        "SOFR":     "SOFR Rate",
+        "RRPONTSYD": "Reverse Repo (RRP)",
+        "WALCL":    "Fed Balance Sheet",
+    }
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("FRED_API_KEY", "")
+        self._last_values = {}
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return  # silently skip without key
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                for series_id, label in self.SERIES.items():
+                    params = {
+                        "series_id": series_id,
+                        "api_key": self.api_key,
+                        "file_type": "json",
+                        "sort_order": "desc",
+                        "limit": "1",
+                    }
+                    async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+
+                    observations = data.get("observations", [])
+                    if not observations:
+                        continue
+
+                    obs = observations[0]
+                    value = obs.get("value", ".")
+                    date = obs.get("date", "")
+
+                    if value == ".":  # missing data
+                        continue
+
+                    key = f"fred-{series_id}-{date}-{value}"
+                    if self._already_seen(key):
+                        continue
+
+                    # Detect change from last known
+                    prev = self._last_values.get(series_id)
+                    change_text = ""
+                    if prev:
+                        try:
+                            delta = float(value) - float(prev)
+                            change_text = f" ({delta:+.3f})"
+                        except ValueError:
+                            pass
+                    self._last_values[series_id] = value
+
+                    await self.emit({
+                        "text": f"FRED: {label} = {value}{change_text} ({date})",
+                        "series_id": series_id,
+                        "series_name": label,
+                        "value": value,
+                        "date": date,
+                        "extra_json": json.dumps({
+                            "series_id": series_id,
+                            "value": value,
+                            "date": date,
+                        }),
+                    })
+
+        except Exception as e:
+            log.warning("[FRED] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -1484,6 +2175,7 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
     Config keys:
       - EIA_API_KEY (required for EIA)
       - BLS_API_KEY (optional, increases rate limit 25→500/day)
+      - FRED_API_KEY (optional, enables FRED source)
       - WHALE_ALERT_KEY (optional, free tier available)
       - COINGLASS_KEY (optional, free tier available)
       - ETHERSCAN_API_KEY (optional)
@@ -1500,12 +2192,25 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         FederalRegisterSource(queue),
         SecPressReleaseSource(queue),
         BlsSource(queue, api_key=config.get("BLS_API_KEY", "")),
+        TreasuryAuctionSource(queue),
+        CftcCotSource(queue),
+        FredSource(queue, api_key=config.get("FRED_API_KEY", "")),
 
         # ── SEC / Regulatory ──
         EdgarFilingSource(queue),
+        SecForm4Source(queue),
         FdaMedwatchSource(queue),
         SecEnforcementSource(queue),
+        FercEnergySource(queue),
+
+        # ── Physical World / Weather ──
         NoaaSpaceWeatherSource(queue),
+        UsgsEarthquakeSource(queue),
+        NwsSevereWeatherSource(queue),
+        NhcTropicalSource(queue),
+
+        # ── Prediction Markets ──
+        PolymarketSource(queue),
 
         # ── Real-Time Exchange Data ──
         KrakenFundingRateSource(queue),

@@ -1606,6 +1606,19 @@ SOURCE_METHOD_MAP = {
     "OKX Funding":          "coinglass",
     # Live prices — pass through as onchain (price monitoring)
     "Kraken Price":         "onchain",
+    # Physical world / weather
+    "USGS Earthquake":      "noaa",
+    "NWS Weather":          "noaa",
+    "NHC Tropical":         "noaa",
+    # Government / macro
+    "Treasury Auction":     "fed",
+    "CFTC COT":             "fed",
+    "FRED":                 "fed",
+    "FERC Energy":          "eia",
+    # SEC insider
+    "SEC Form 4":           "edgar",
+    # Prediction markets
+    "Polymarket":           "fed",
 }
 
 # Sources where keyword will often fail — send to transformer
