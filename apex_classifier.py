@@ -1634,6 +1634,11 @@ SOURCE_METHOD_MAP = {
     # DeFi / crypto
     "dYdX":                 "coinglass",
     "Mempool":              "onchain",
+    # Legislative / intelligence
+    "Congress":             "federal_register",
+    "NASA FIRMS":           "noaa",
+    "GIE AGSI":             "eia",
+    "OpenSky":              "noaa",
 }
 
 # Sources where keyword will often fail — send to transformer

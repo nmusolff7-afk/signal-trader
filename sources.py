@@ -2760,6 +2760,362 @@ class FedRegPrePubSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# CONGRESS.GOV API (Library of Congress)
+# Bills, hearings, nominations. Free key required.
+# ═══════════════════════════════════════════════════════
+
+class CongressSource(BaseSource):
+    """Congress.gov — recent bills, hearings, nominations. Free key."""
+    name = "Congress"
+    interval_seconds = 600.0
+
+    BILLS_URL = "https://api.congress.gov/v3/bill"
+    HEARINGS_URL = "https://api.congress.gov/v3/committee-meeting"
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("CONGRESS_API_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Recent bills
+                params = {
+                    "api_key": self.api_key,
+                    "limit": "20",
+                    "sort": "updateDate+desc",
+                    "format": "json",
+                }
+                async with session.get(self.BILLS_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for bill in data.get("bills", [])[:10]:
+                            bill_num = bill.get("number", "")
+                            bill_type = bill.get("type", "")
+                            title = bill.get("title", "")[:150]
+                            action = bill.get("latestAction", {}).get("text", "")[:100]
+                            update = bill.get("updateDate", "")
+
+                            key = f"congress-{bill_type}{bill_num}-{update}"
+                            if self._already_seen(key):
+                                continue
+
+                            await self.emit({
+                                "text": f"Congress: {bill_type}{bill_num} — {title} [{action}]",
+                                "bill_number": f"{bill_type}{bill_num}",
+                                "title": title,
+                                "action": action,
+                                "extra_json": json.dumps({
+                                    "bill": f"{bill_type}{bill_num}",
+                                    "title": title[:100],
+                                    "action": action,
+                                }),
+                            })
+
+                # Committee hearings
+                params["limit"] = "10"
+                async with session.get(self.HEARINGS_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for mtg in data.get("committeeMeetings", data.get("committee-meetings", []))[:5]:
+                            if not isinstance(mtg, dict):
+                                continue
+                            title = mtg.get("title", "")[:150]
+                            date = mtg.get("date", "")
+                            chamber = mtg.get("chamber", "")
+
+                            key = f"congress-hearing-{date}-{title[:40]}"
+                            if self._already_seen(key):
+                                continue
+
+                            await self.emit({
+                                "text": f"Congress hearing ({chamber}): {title}",
+                                "title": title,
+                                "date": date,
+                                "chamber": chamber,
+                                "extra_json": json.dumps({"title": title[:100], "date": date}),
+                            })
+        except Exception as e:
+            log.warning("[Congress] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# NASA FIRMS FIRE DETECTION (satellite thermal anomalies)
+# Free MAP_KEY. Fires near oil/gas infrastructure.
+# ═══════════════════════════════════════════════════════
+
+class NasaFirmsSource(BaseSource):
+    """NASA FIRMS — satellite fire detection near energy infrastructure. Free key."""
+    name = "NASA FIRMS"
+    interval_seconds = 300.0  # every 5 min
+
+    # Area query for key energy regions (US Gulf Coast + Permian Basin)
+    # Format: west,south,east,north
+    AREAS = {
+        "Gulf Coast": "-98,26,-88,32",
+        "Permian Basin": "-105,30,-100,34",
+        "California": "-122,33,-115,38",
+    }
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("NASA_FIRMS_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                for region, coords in self.AREAS.items():
+                    url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{self.api_key}/VIIRS_NOAA20_NRT/{coords}/1"
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status != 200:
+                            continue
+                        text = await resp.text()
+
+                    lines = text.strip().split("\n")
+                    if len(lines) < 2:
+                        continue
+
+                    headers = lines[0].split(",")
+                    for line in lines[1:11]:  # max 10 fires per region
+                        fields = line.split(",")
+                        if len(fields) < len(headers):
+                            continue
+
+                        row = dict(zip(headers, fields))
+                        lat = row.get("latitude", "")
+                        lon = row.get("longitude", "")
+                        bright = row.get("bright_ti4", row.get("brightness", ""))
+                        conf = row.get("confidence", "")
+                        acq_date = row.get("acq_date", "")
+                        acq_time = row.get("acq_time", "")
+
+                        key = f"firms-{lat}-{lon}-{acq_date}-{acq_time}"
+                        if self._already_seen(key):
+                            continue
+
+                        # Only high confidence fires
+                        if conf and conf.lower() in ("l", "low"):
+                            continue
+
+                        await self.emit({
+                            "text": f"NASA FIRMS: Fire detected in {region} ({lat},{lon}) brightness={bright} conf={conf}",
+                            "region": region,
+                            "lat": lat,
+                            "lon": lon,
+                            "brightness": bright,
+                            "confidence": conf,
+                            "extra_json": json.dumps({
+                                "region": region,
+                                "lat": lat,
+                                "lon": lon,
+                                "brightness": bright,
+                            }),
+                        })
+        except Exception as e:
+            log.warning("[NASA FIRMS] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# GIE AGSI+ EUROPEAN GAS STORAGE
+# Free key. Daily EU gas storage fill levels.
+# ═══════════════════════════════════════════════════════
+
+class GieAgsiSource(BaseSource):
+    """GIE AGSI+ — European gas storage levels. Free key via x-key header."""
+    name = "GIE AGSI"
+    interval_seconds = 3600.0  # hourly (data is daily)
+
+    API_URL = "https://agsi.gie.eu/api"
+
+    COUNTRIES = {"EU": "EU aggregate", "DE": "Germany", "NL": "Netherlands", "IT": "Italy", "FR": "France"}
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("GIE_API_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+
+        try:
+            headers = {"x-key": self.api_key}
+            async with aiohttp.ClientSession() as session:
+                for code, label in self.COUNTRIES.items():
+                    params = {"country": code}
+                    async with session.get(self.API_URL, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+
+                    # Data is a list of daily records
+                    records = data if isinstance(data, list) else data.get("data", [])
+                    if not records:
+                        continue
+
+                    latest = records[0] if isinstance(records[0], dict) else {}
+                    gas_day = latest.get("gasDayStart", latest.get("gasDayStartedOn", ""))
+                    full_pct = latest.get("full", latest.get("fullPercent", 0))
+                    injection = latest.get("injection", 0)
+                    withdrawal = latest.get("withdrawal", 0)
+                    trend = latest.get("trend", 0)
+
+                    key = f"gie-{code}-{gas_day}"
+                    if self._already_seen(key):
+                        continue
+
+                    flow = "injection" if float(injection or 0) > float(withdrawal or 0) else "withdrawal"
+
+                    await self.emit({
+                        "text": f"GIE AGSI: {label} gas storage {full_pct}% full ({flow}, trend {trend}) — {gas_day}",
+                        "country": code,
+                        "full_pct": full_pct,
+                        "injection": injection,
+                        "withdrawal": withdrawal,
+                        "gas_day": gas_day,
+                        "extra_json": json.dumps({
+                            "country": code,
+                            "full_pct": full_pct,
+                            "flow": flow,
+                            "gas_day": gas_day,
+                        }),
+                    })
+        except Exception as e:
+            log.warning("[GIE AGSI] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# OPENSKY NETWORK — LIVE AIRCRAFT TRACKING (ADS-B)
+# Free registered account. Raw state vectors: position, velocity,
+# heading, altitude, callsign, ICAO24 hex address.
+# ═══════════════════════════════════════════════════════
+
+class OpenSkySource(BaseSource):
+    """
+    OpenSky Network — raw ADS-B aircraft state vectors.
+    Monitors key bounding boxes: Persian Gulf, DC area, major airports.
+    Tracks military transponder prefixes and known VIP callsigns.
+    Free registered account (4000 credits/day).
+    """
+    name = "OpenSky"
+    interval_seconds = 30.0
+
+    API_URL = "https://opensky-network.org/api/states/all"
+
+    # Bounding boxes: lamin, lomin, lamax, lomax
+    WATCH_AREAS = {
+        "Persian Gulf": {"lamin": 24, "lomin": 48, "lamax": 30, "lomax": 57},
+        "DC Area": {"lamin": 38.5, "lomin": -77.5, "lamax": 39.2, "lomax": -76.5},
+        "Taiwan Strait": {"lamin": 22, "lomin": 117, "lamax": 26, "lomax": 121},
+    }
+
+    # ICAO24 hex prefixes for military aircraft (US=AE/AF, UK=43, NATO=various)
+    MILITARY_PREFIXES = ("ae", "af", "43", "3e", "3f", "50", "70", "71")
+
+    # Known high-interest callsigns (partial match)
+    VIP_CALLSIGNS = {"SAM", "EXEC", "VENUS", "REACH", "EVAC", "IRON", "DUKE", "RCH"}
+
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._last_military_count = {}
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                for area_name, bbox in self.WATCH_AREAS.items():
+                    params = {**bbox}
+                    try:
+                        async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    states = data.get("states", [])
+                    if not states:
+                        continue
+
+                    # Count military aircraft in zone
+                    military_count = 0
+                    vip_aircraft = []
+
+                    for sv in states:
+                        # State vector: [icao24, callsign, origin, time_pos, last_contact,
+                        #                lon, lat, baro_alt, on_ground, velocity,
+                        #                heading, vert_rate, sensors, geo_alt, squawk, spi, pos_source]
+                        if len(sv) < 8:
+                            continue
+
+                        icao24 = (sv[0] or "").lower()
+                        callsign = (sv[1] or "").strip()
+                        lon = sv[5]
+                        lat = sv[6]
+                        alt = sv[7]  # baro altitude meters
+                        on_ground = sv[8]
+                        velocity = sv[9]  # m/s
+                        squawk = sv[14] if len(sv) > 14 else ""
+
+                        if on_ground:
+                            continue
+
+                        # Military detection
+                        is_military = any(icao24.startswith(p) for p in self.MILITARY_PREFIXES)
+                        if is_military:
+                            military_count += 1
+
+                        # VIP callsign detection
+                        is_vip = any(v in callsign.upper() for v in self.VIP_CALLSIGNS)
+                        if is_vip:
+                            vip_aircraft.append({
+                                "callsign": callsign,
+                                "icao24": icao24,
+                                "alt_ft": int((alt or 0) * 3.281),
+                                "speed_kts": int((velocity or 0) * 1.944),
+                            })
+
+                    # Emit military aircraft count changes
+                    last = self._last_military_count.get(area_name, 0)
+                    self._last_military_count[area_name] = military_count
+
+                    key = f"opensky-mil-{area_name}-{military_count}"
+                    if military_count > 0 and not self._already_seen(key):
+                        delta = military_count - last
+                        delta_text = f" ({delta:+d})" if last > 0 else ""
+                        await self.emit({
+                            "text": f"OpenSky: {area_name} — {military_count} military aircraft airborne{delta_text}, {len(states)} total",
+                            "area": area_name,
+                            "military_count": military_count,
+                            "total_aircraft": len(states),
+                            "extra_json": json.dumps({
+                                "area": area_name,
+                                "military": military_count,
+                                "total": len(states),
+                            }),
+                        })
+
+                    # Emit VIP aircraft detections
+                    for vip in vip_aircraft:
+                        vip_key = f"opensky-vip-{vip['callsign']}-{area_name}"
+                        if not self._already_seen(vip_key):
+                            await self.emit({
+                                "text": f"OpenSky: VIP aircraft {vip['callsign']} in {area_name} — {vip['alt_ft']}ft, {vip['speed_kts']}kts",
+                                "area": area_name,
+                                "callsign": vip["callsign"],
+                                "icao24": vip["icao24"],
+                                "extra_json": json.dumps(vip),
+                            })
+
+        except Exception as e:
+            log.warning("[OpenSky] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -2767,20 +3123,7 @@ class FedRegPrePubSource(BaseSource):
 import os
 
 def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
-    """
-    Instantiate all active sources. Pass config dict with API keys.
-
-    Config keys:
-      - EIA_API_KEY (required for EIA)
-      - BLS_API_KEY (optional, increases rate limit 25->500/day)
-      - FRED_API_KEY (optional, enables FRED source)
-      - CONGRESS_API_KEY (optional, enables Congress.gov)
-      - NASA_FIRMS_KEY (optional, enables satellite fire detection)
-      - GIE_API_KEY (optional, enables EU gas storage)
-      - WHALE_ALERT_KEY (optional, free tier available)
-      - COINGLASS_KEY (optional, free tier available)
-      - ETHERSCAN_API_KEY (optional)
-    """
+    """Instantiate all active sources."""
     return [
         # -- Live Price Data --
         KrakenPriceSource(queue),
@@ -2791,16 +3134,17 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         FedRssSource(queue),
         EcbRssSource(queue),
         FederalRegisterSource(queue),
-        FedRegPrePubSource(queue),          # pre-publication, 15h early
+        FedRegPrePubSource(queue),
         SecPressReleaseSource(queue),
         BlsSource(queue, api_key=config.get("BLS_API_KEY", "")),
         TreasuryAuctionSource(queue),
         CftcCotSource(queue),
         FredSource(queue, api_key=config.get("FRED_API_KEY", "")),
-        WhiteHouseSource(queue),            # presidential actions
+        WhiteHouseSource(queue),
+        CongressSource(queue, api_key=config.get("CONGRESS_API_KEY", "")),
 
         # -- Central Banks --
-        BoeSource(queue),                   # Bank of England
+        BoeSource(queue),
 
         # -- SEC / Regulatory --
         EdgarFilingSource(queue),
@@ -2808,26 +3152,31 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         FdaMedwatchSource(queue),
         SecEnforcementSource(queue),
         FercEnergySource(queue),
-        NrcReactorSource(queue),            # nuclear reactor events
+        NrcReactorSource(queue),
 
         # -- Physical World / Weather --
         NoaaSpaceWeatherSource(queue),
         UsgsEarthquakeSource(queue),
         NwsSevereWeatherSource(queue),
         NhcTropicalSource(queue),
+        NasaFirmsSource(queue, api_key=config.get("NASA_FIRMS_KEY", "")),
 
         # -- Infrastructure / Trade --
-        FaaNasSource(queue),                # aviation delays
-        CbpBorderSource(queue),             # US-Mexico border waits
-        MisoGridSource(queue),              # power grid
+        FaaNasSource(queue),
+        CbpBorderSource(queue),
+        MisoGridSource(queue),
 
         # -- Global Event Detection --
-        GdeltDocSource(queue),              # 65-language news monitoring
-        WhoOutbreakSource(queue),           # pandemic early warning
+        GdeltDocSource(queue),
+        WhoOutbreakSource(queue),
 
         # -- Financial Markets --
-        PolymarketSource(queue),            # prediction markets
-        FinraAtsSource(queue),              # dark pool volume
+        PolymarketSource(queue),
+        FinraAtsSource(queue),
+        GieAgsiSource(queue, api_key=config.get("GIE_API_KEY", "")),
+
+        # -- Aircraft Tracking --
+        OpenSkySource(queue),
 
         # -- Real-Time Exchange Data --
         KrakenFundingRateSource(queue),
@@ -2835,8 +3184,8 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         BlockchainComSource(queue),
 
         # -- Crypto / DeFi --
-        DydxSource(queue),                  # DEX perpetuals
-        MempoolSource(queue),               # BTC mempool + fees
+        DydxSource(queue),
+        MempoolSource(queue),
         EtherscanSource(queue, api_key=config.get("ETHERSCAN_API_KEY", "")),
         CoinGeckoSource(queue),
 
