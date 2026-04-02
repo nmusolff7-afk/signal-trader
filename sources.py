@@ -2161,6 +2161,604 @@ class FredSource(BaseSource):
             log.warning("[FRED] Error: %s", e)
 
 
+
+
+# ═══════════════════════════════════════════════════════
+# MISO REAL-TIME GRID DATA
+# Zero auth. 5-min LMPs, fuel mix, wind actuals.
+# ═══════════════════════════════════════════════════════
+
+class MisoGridSource(BaseSource):
+    """MISO grid: 5-min LMPs + fuel mix. Zero auth."""
+    name = "MISO Grid"
+    interval_seconds = 300.0
+
+    LMP_URL = "https://api.misoenergy.org/MISORTWDBIReporter/Reporter.asmx?messageType=currentinterval&returnType=json"
+    FUEL_URL = "https://api.misoenergy.org/MISORTWDDataBroker/DataBrokerServices.asmx?messageType=getfuelmix&returnType=json"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Fuel mix
+                async with session.get(self.FUEL_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        fuel_mix = data.get("Fuel", {}).get("Type", []) if isinstance(data, dict) else []
+                        if isinstance(data, dict):
+                            # MISO returns nested structure
+                            categories = data.get("Fuel", data.get("FuelMix", {}))
+                            if isinstance(categories, dict):
+                                fuel_mix = categories.get("Type", [])
+                            elif isinstance(categories, list):
+                                fuel_mix = categories
+                        for fuel in (fuel_mix if isinstance(fuel_mix, list) else []):
+                            if isinstance(fuel, dict):
+                                cat = fuel.get("CATEGORY", fuel.get("category", ""))
+                                gen = fuel.get("ACT", fuel.get("act", 0))
+                                key = f"miso-fuel-{cat}-{gen}"
+                                if not self._already_seen(key):
+                                    await self.emit({
+                                        "text": f"MISO Fuel Mix: {cat} = {gen} MW",
+                                        "category": cat,
+                                        "generation_mw": gen,
+                                        "extra_json": json.dumps({"category": cat, "mw": gen}),
+                                    })
+
+                # LMP snapshot
+                async with session.get(self.LMP_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        # Extract summary LMP if available
+                        if isinstance(data, dict):
+                            refid = data.get("RefId", "")
+                            key = f"miso-lmp-{refid}"
+                            if refid and not self._already_seen(key):
+                                await self.emit({
+                                    "text": f"MISO: LMP interval update {refid}",
+                                    "extra_json": json.dumps({"ref_id": refid}),
+                                })
+        except Exception as e:
+            log.warning("[MISO Grid] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# NRC NUCLEAR REACTOR STATUS
+# RSS feed. No auth. Reactor scrams, outages, emergencies.
+# ═══════════════════════════════════════════════════════
+
+class NrcReactorSource(BaseSource):
+    """NRC event notifications + reactor status RSS. No auth."""
+    name = "NRC Reactor"
+    interval_seconds = 600.0
+
+    EVENT_RSS = "https://www.nrc.gov/public-involve/rss?feed=event"
+    NEWS_RSS = "https://www.nrc.gov/public-involve/rss?feed=news"
+
+    async def poll(self) -> None:
+        loop = asyncio.get_event_loop()
+        for feed_name, url in [("events", self.EVENT_RSS), ("news", self.NEWS_RSS)]:
+            try:
+                feed = await loop.run_in_executor(None, feedparser.parse, url)
+                for entry in feed.entries[:10]:
+                    uid = entry.get("id") or entry.get("link", "")
+                    if self._already_seen(uid):
+                        continue
+                    title = entry.get("title", "")
+                    summary = entry.get("summary", "")[:200]
+                    await self.emit({
+                        "text": f"NRC {feed_name}: {title}",
+                        "title": title,
+                        "summary": summary,
+                        "link": entry.get("link", ""),
+                        "extra_json": json.dumps({"uid": uid, "feed": feed_name}),
+                    })
+            except Exception as e:
+                log.warning("[NRC Reactor] %s error: %s", feed_name, e)
+
+
+# ═══════════════════════════════════════════════════════
+# WHITE HOUSE PRESIDENTIAL ACTIONS RSS
+# No auth. EOs appear hours before Federal Register.
+# ═══════════════════════════════════════════════════════
+
+class WhiteHouseSource(BaseSource):
+    """White House presidential actions + briefings RSS. No auth."""
+    name = "White House"
+    interval_seconds = 120.0  # every 2 min
+
+    FEEDS = {
+        "actions": "https://www.whitehouse.gov/presidential-actions/feed/",
+        "briefings": "https://www.whitehouse.gov/briefings-statements/feed/",
+    }
+
+    async def poll(self) -> None:
+        loop = asyncio.get_event_loop()
+        for feed_name, url in self.FEEDS.items():
+            try:
+                feed = await loop.run_in_executor(None, feedparser.parse, url)
+                for entry in feed.entries[:10]:
+                    uid = entry.get("id") or entry.get("link", "")
+                    if self._already_seen(uid):
+                        continue
+                    title = entry.get("title", "")
+                    await self.emit({
+                        "text": f"White House {feed_name}: {title}",
+                        "title": title,
+                        "link": entry.get("link", ""),
+                        "extra_json": json.dumps({"uid": uid, "feed": feed_name}),
+                    })
+            except Exception as e:
+                log.warning("[White House] %s error: %s", feed_name, e)
+
+
+# ═══════════════════════════════════════════════════════
+# FAA NAS STATUS API
+# No auth. Ground stops, delays, airport closures.
+# ═══════════════════════════════════════════════════════
+
+class FaaNasSource(BaseSource):
+    """FAA NAS airport status — ground stops, delays. No auth."""
+    name = "FAA NAS"
+    interval_seconds = 120.0
+
+    API_URL = "https://nasstatus.faa.gov/api/airport-status-information"
+    LEGACY_URL = "https://soa.smext.faa.gov/asws/api/airport/delays"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Try primary first
+                for url in [self.API_URL, self.LEGACY_URL]:
+                    try:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                            break
+                    except Exception:
+                        continue
+                else:
+                    return
+
+                # Handle both API response formats
+                delays = data if isinstance(data, list) else data.get("delays", data.get("data", []))
+                if isinstance(delays, dict):
+                    delays = [delays]
+
+                for delay in (delays if isinstance(delays, list) else []):
+                    if not isinstance(delay, dict):
+                        continue
+                    airport = delay.get("arpt", delay.get("IATA", delay.get("airport", "")))
+                    reason = delay.get("reason", delay.get("type", ""))
+                    status = delay.get("status", "")
+
+                    key = f"faa-{airport}-{reason}-{status}"
+                    if not key.strip("-") or self._already_seen(key):
+                        continue
+
+                    text = f"FAA: {airport}"
+                    if reason:
+                        text += f" — {reason}"
+                    if status:
+                        text += f" ({status})"
+
+                    await self.emit({
+                        "text": text,
+                        "airport": airport,
+                        "reason": reason,
+                        "extra_json": json.dumps(delay) if len(json.dumps(delay)) < 2000 else json.dumps({"airport": airport, "reason": reason}),
+                    })
+        except Exception as e:
+            log.warning("[FAA NAS] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# CBP BORDER WAIT TIMES
+# No auth. Commercial vehicle delays at US-Mexico ports.
+# ═══════════════════════════════════════════════════════
+
+class CbpBorderSource(BaseSource):
+    """CBP border wait times — commercial delays at US-Mexico ports. No auth."""
+    name = "CBP Border"
+    interval_seconds = 900.0  # every 15 min
+
+    API_URL = "https://bwt.cbp.gov/api/waittimes"
+
+    # Major US-Mexico trade ports
+    KEY_PORTS = {"Laredo", "El Paso", "Otay Mesa", "Nogales", "Hidalgo", "Brownsville", "Eagle Pass"}
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+                for port in data if isinstance(data, list) else []:
+                    name = port.get("port_name", port.get("port", ""))
+                    if not any(kp.lower() in name.lower() for kp in self.KEY_PORTS):
+                        continue
+
+                    comm_delay = port.get("commercial_vehicle_lanes", {})
+                    if isinstance(comm_delay, dict):
+                        delay_min = comm_delay.get("delay_minutes", comm_delay.get("standard_lanes", {}).get("delay_minutes", 0))
+                    else:
+                        delay_min = 0
+
+                    key = f"cbp-{name}-{delay_min}"
+                    if self._already_seen(key):
+                        continue
+
+                    if delay_min and int(delay_min) > 0:
+                        await self.emit({
+                            "text": f"CBP: {name} — commercial delay {delay_min} min",
+                            "port": name,
+                            "delay_minutes": delay_min,
+                            "extra_json": json.dumps({"port": name, "delay": delay_min}),
+                        })
+        except Exception as e:
+            log.warning("[CBP Border] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# WHO DISEASE OUTBREAK NEWS
+# OData JSON. No auth. Pandemic early warning.
+# ═══════════════════════════════════════════════════════
+
+class WhoOutbreakSource(BaseSource):
+    """WHO Disease Outbreak News — pandemic early warning. No auth."""
+    name = "WHO Outbreak"
+    interval_seconds = 1800.0  # every 30 min
+
+    API_URL = "https://www.who.int/api/news/diseaseoutbreaknews"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                params = {"$orderby": "PublicationDate desc", "$top": "10"}
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+                items = data.get("value", data) if isinstance(data, dict) else data
+                for item in (items if isinstance(items, list) else []):
+                    uid = item.get("Id", item.get("UrlName", ""))
+                    if not uid or self._already_seen(str(uid)):
+                        continue
+
+                    title = item.get("Title", item.get("ItemDefaultUrl", ""))
+                    pub_date = item.get("PublicationDate", "")
+                    disease = item.get("DiseaseNames", "")
+
+                    await self.emit({
+                        "text": f"WHO: {title}",
+                        "title": title,
+                        "disease": disease,
+                        "pub_date": pub_date,
+                        "extra_json": json.dumps({"uid": uid, "disease": disease, "date": pub_date}),
+                    })
+        except Exception as e:
+            log.warning("[WHO Outbreak] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# FINRA ATS DARK POOL VOLUME
+# No auth. Weekly dark pool volume anomalies.
+# ═══════════════════════════════════════════════════════
+
+class FinraAtsSource(BaseSource):
+    """FINRA ATS weekly dark pool volume. No auth."""
+    name = "FINRA ATS"
+    interval_seconds = 3600.0  # hourly (data is weekly)
+
+    API_URL = "https://api.finra.org/data/group/otcmarket/name/weeklysummary"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"Accept": "application/json"}
+                async with session.get(self.API_URL, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+                items = data if isinstance(data, list) else data.get("data", [])
+                for record in items[:20]:
+                    if not isinstance(record, dict):
+                        continue
+                    symbol = record.get("symbol", record.get("issueSymbolIdentifier", ""))
+                    volume = record.get("totalWeeklyShareQuantity", record.get("volume", 0))
+                    trades = record.get("totalWeeklyTradeCount", record.get("trades", 0))
+                    week = record.get("weekStartDate", "")
+
+                    key = f"finra-{symbol}-{week}"
+                    if not symbol or self._already_seen(key):
+                        continue
+
+                    await self.emit({
+                        "text": f"FINRA ATS: {symbol} — {volume:,} shares, {trades:,} trades (week {week})",
+                        "symbol": symbol,
+                        "volume": volume,
+                        "trades": trades,
+                        "week": week,
+                        "extra_json": json.dumps({"symbol": symbol, "volume": volume, "trades": trades}),
+                    })
+        except Exception as e:
+            log.warning("[FINRA ATS] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# dYdX v4 PERPETUAL MARKETS
+# No auth. DEX funding rates, OI, volume.
+# ═══════════════════════════════════════════════════════
+
+class DydxSource(BaseSource):
+    """dYdX v4 perpetual markets — funding, OI, volume. No auth."""
+    name = "dYdX"
+    interval_seconds = 60.0
+
+    MARKETS_URL = "https://indexer.dydx.trade/v4/perpetualMarkets"
+
+    TRACKED = {"BTC-USD", "ETH-USD", "SOL-USD"}
+
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._last_funding = {}
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.MARKETS_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+                markets = data.get("markets", {})
+                for ticker, info in markets.items():
+                    if ticker not in self.TRACKED:
+                        continue
+
+                    funding = float(info.get("nextFundingRate", 0) or 0)
+                    oi = float(info.get("openInterest", 0) or 0)
+                    price = float(info.get("oraclePrice", 0) or 0)
+                    vol_24h = float(info.get("volume24H", 0) or 0)
+
+                    # Only emit on funding change
+                    last = self._last_funding.get(ticker)
+                    self._last_funding[ticker] = funding
+
+                    key = f"dydx-{ticker}-{funding:.8f}"
+                    if self._already_seen(key):
+                        continue
+
+                    funding_pct = funding * 100
+                    await self.emit({
+                        "text": f"dYdX {ticker}: funding {funding_pct:+.4f}%, OI ${oi:,.0f}, price ${price:,.2f}",
+                        "ticker": ticker,
+                        "funding_rate": funding,
+                        "open_interest": oi,
+                        "oracle_price": price,
+                        "volume_24h": vol_24h,
+                        "extra_json": json.dumps({
+                            "ticker": ticker,
+                            "funding": funding,
+                            "oi": oi,
+                            "price": price,
+                        }),
+                    })
+        except Exception as e:
+            log.warning("[dYdX] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# MEMPOOL.SPACE (Bitcoin mempool, fees, difficulty)
+# No auth. Fee spikes = demand signal. Difficulty = miner economics.
+# ═══════════════════════════════════════════════════════
+
+class MempoolSource(BaseSource):
+    """Bitcoin mempool fees + difficulty adjustment. No auth."""
+    name = "Mempool"
+    interval_seconds = 30.0
+
+    FEES_URL = "https://mempool.space/api/v1/fees/recommended"
+    DIFF_URL = "https://mempool.space/api/v1/difficulty-adjustment"
+    HASHRATE_URL = "https://mempool.space/api/v1/mining/hashrate/1m"
+
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._last_fast_fee = 0
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Fees
+                async with session.get(self.FEES_URL, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        fees = await resp.json()
+                        fast = fees.get("fastestFee", 0)
+                        medium = fees.get("halfHourFee", 0)
+                        slow = fees.get("hourFee", 0)
+
+                        # Only emit on meaningful fee change
+                        if abs(fast - self._last_fast_fee) >= 2:
+                            self._last_fast_fee = fast
+                            await self.emit({
+                                "text": f"Mempool: BTC fees — fast {fast} sat/vB, medium {medium}, slow {slow}",
+                                "fast_fee": fast,
+                                "medium_fee": medium,
+                                "slow_fee": slow,
+                                "extra_json": json.dumps(fees),
+                            })
+
+                # Difficulty adjustment
+                async with session.get(self.DIFF_URL, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        diff = await resp.json()
+                        change_pct = diff.get("difficultyChange", 0)
+                        remaining = diff.get("remainingBlocks", 0)
+                        eta = diff.get("estimatedRetargetDate", 0)
+
+                        key = f"mempool-diff-{remaining}"
+                        if not self._already_seen(key) and remaining < 200:
+                            await self.emit({
+                                "text": f"Mempool: BTC difficulty retarget in {remaining} blocks ({change_pct:+.2f}%)",
+                                "difficulty_change": change_pct,
+                                "remaining_blocks": remaining,
+                                "extra_json": json.dumps(diff),
+                            })
+
+        except Exception as e:
+            log.warning("[Mempool] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# GDELT DOC 2.0 API
+# No auth. Global event monitoring, 65 languages.
+# ═══════════════════════════════════════════════════════
+
+class GdeltDocSource(BaseSource):
+    """GDELT DOC 2.0 — global event sentiment monitoring. No auth."""
+    name = "GDELT"
+    interval_seconds = 900.0  # every 15 min
+
+    API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
+
+    QUERIES = [
+        ("tariff OR sanctions OR trade war", "trade"),
+        ("OPEC OR crude oil OR pipeline", "energy"),
+        ("military OR missile OR invasion", "conflict"),
+        ("fed rate OR inflation OR CPI", "macro"),
+    ]
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                for query, category in self.QUERIES:
+                    params = {
+                        "query": query,
+                        "mode": "artlist",
+                        "maxrecords": "5",
+                        "timespan": "15min",
+                        "format": "json",
+                        "sort": "datedesc",
+                    }
+                    try:
+                        async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    articles = data.get("articles", [])
+                    for article in articles[:3]:
+                        url = article.get("url", "")
+                        if not url or self._already_seen(url):
+                            continue
+                        title = article.get("title", "")
+                        tone = article.get("tone", 0)
+                        domain = article.get("domain", "")
+                        lang = article.get("language", "")
+
+                        await self.emit({
+                            "text": f"GDELT [{category}]: {title[:120]} (tone:{tone:.1f}, {domain})",
+                            "title": title[:150],
+                            "category": category,
+                            "tone": tone,
+                            "domain": domain,
+                            "language": lang,
+                            "extra_json": json.dumps({
+                                "url": url,
+                                "category": category,
+                                "tone": tone,
+                                "lang": lang,
+                            }),
+                        })
+        except Exception as e:
+            log.warning("[GDELT] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# BANK OF ENGLAND RSS + RATES
+# No auth. MPC decisions, speeches, SONIA rate.
+# ═══════════════════════════════════════════════════════
+
+class BoeSource(BaseSource):
+    """Bank of England news/speeches RSS + Bank Rate CSV. No auth."""
+    name = "BoE"
+    interval_seconds = 600.0
+
+    NEWS_RSS = "https://www.bankofengland.co.uk/rss/news"
+    SPEECHES_RSS = "https://www.bankofengland.co.uk/rss/speeches"
+
+    async def poll(self) -> None:
+        loop = asyncio.get_event_loop()
+        for feed_name, url in [("news", self.NEWS_RSS), ("speeches", self.SPEECHES_RSS)]:
+            try:
+                feed = await loop.run_in_executor(None, feedparser.parse, url)
+                for entry in feed.entries[:10]:
+                    uid = entry.get("id") or entry.get("link", "")
+                    if self._already_seen(uid):
+                        continue
+                    title = entry.get("title", "")
+                    await self.emit({
+                        "text": f"BoE {feed_name}: {title}",
+                        "title": title,
+                        "link": entry.get("link", ""),
+                        "extra_json": json.dumps({"uid": uid, "feed": feed_name}),
+                    })
+            except Exception as e:
+                log.warning("[BoE] %s error: %s", feed_name, e)
+
+
+# ═══════════════════════════════════════════════════════
+# FEDERAL REGISTER PRE-PUBLICATION (UPGRADE)
+# No auth. 15-hour window before official publication.
+# ═══════════════════════════════════════════════════════
+
+class FedRegPrePubSource(BaseSource):
+    """Federal Register pre-publication documents — 15h early window. No auth."""
+    name = "FedReg PrePub"
+    interval_seconds = 600.0
+
+    API_URL = "https://www.federalregister.gov/api/v1/public-inspection-documents/current.json"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+                results = data.get("results", []) if isinstance(data, dict) else data
+                for doc in (results if isinstance(results, list) else [])[:15]:
+                    doc_num = doc.get("document_number", "")
+                    if not doc_num or self._already_seen(doc_num):
+                        continue
+
+                    doc_type = doc.get("type", "")
+                    title = doc.get("title", "")[:150]
+                    agencies = ", ".join(a.get("name", "") for a in doc.get("agencies", [])[:3])
+
+                    await self.emit({
+                        "text": f"FedReg PrePub [{doc_type}]: {title} ({agencies})",
+                        "document_number": doc_num,
+                        "doc_type": doc_type,
+                        "title": title,
+                        "agencies": agencies,
+                        "extra_json": json.dumps({
+                            "doc_number": doc_num,
+                            "type": doc_type,
+                            "agencies": agencies,
+                        }),
+                    })
+        except Exception as e:
+            log.warning("[FedReg PrePub] Error: %s", e)
+
+
 # ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
@@ -2174,54 +2772,75 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
 
     Config keys:
       - EIA_API_KEY (required for EIA)
-      - BLS_API_KEY (optional, increases rate limit 25→500/day)
+      - BLS_API_KEY (optional, increases rate limit 25->500/day)
       - FRED_API_KEY (optional, enables FRED source)
+      - CONGRESS_API_KEY (optional, enables Congress.gov)
+      - NASA_FIRMS_KEY (optional, enables satellite fire detection)
+      - GIE_API_KEY (optional, enables EU gas storage)
       - WHALE_ALERT_KEY (optional, free tier available)
       - COINGLASS_KEY (optional, free tier available)
       - ETHERSCAN_API_KEY (optional)
     """
     return [
-        # ── Live Price Data ──
+        # -- Live Price Data --
         KrakenPriceSource(queue),
 
-        # ── Government / Macro Sources ──
+        # -- Government / Macro Sources --
         EiaPetroleumSource(queue, api_key=config.get("EIA_API_KEY", "")),
         OpecRssSource(queue),
         FedRssSource(queue),
         EcbRssSource(queue),
         FederalRegisterSource(queue),
+        FedRegPrePubSource(queue),          # pre-publication, 15h early
         SecPressReleaseSource(queue),
         BlsSource(queue, api_key=config.get("BLS_API_KEY", "")),
         TreasuryAuctionSource(queue),
         CftcCotSource(queue),
         FredSource(queue, api_key=config.get("FRED_API_KEY", "")),
+        WhiteHouseSource(queue),            # presidential actions
 
-        # ── SEC / Regulatory ──
+        # -- Central Banks --
+        BoeSource(queue),                   # Bank of England
+
+        # -- SEC / Regulatory --
         EdgarFilingSource(queue),
         SecForm4Source(queue),
         FdaMedwatchSource(queue),
         SecEnforcementSource(queue),
         FercEnergySource(queue),
+        NrcReactorSource(queue),            # nuclear reactor events
 
-        # ── Physical World / Weather ──
+        # -- Physical World / Weather --
         NoaaSpaceWeatherSource(queue),
         UsgsEarthquakeSource(queue),
         NwsSevereWeatherSource(queue),
         NhcTropicalSource(queue),
 
-        # ── Prediction Markets ──
-        PolymarketSource(queue),
+        # -- Infrastructure / Trade --
+        FaaNasSource(queue),                # aviation delays
+        CbpBorderSource(queue),             # US-Mexico border waits
+        MisoGridSource(queue),              # power grid
 
-        # ── Real-Time Exchange Data ──
+        # -- Global Event Detection --
+        GdeltDocSource(queue),              # 65-language news monitoring
+        WhoOutbreakSource(queue),           # pandemic early warning
+
+        # -- Financial Markets --
+        PolymarketSource(queue),            # prediction markets
+        FinraAtsSource(queue),              # dark pool volume
+
+        # -- Real-Time Exchange Data --
         KrakenFundingRateSource(queue),
         OkxFundingRateSource(queue),
         BlockchainComSource(queue),
 
-        # ── Blockchain Data ──
+        # -- Crypto / DeFi --
+        DydxSource(queue),                  # DEX perpetuals
+        MempoolSource(queue),               # BTC mempool + fees
         EtherscanSource(queue, api_key=config.get("ETHERSCAN_API_KEY", "")),
         CoinGeckoSource(queue),
 
-        # ── Optional: Requires API Keys ──
+        # -- Optional: Requires API Keys --
         # WhaleAlertSource(queue, api_key=config.get("WHALE_ALERT_KEY", "")),
         # CoinglassSource(queue, api_key=config.get("COINGLASS_KEY", "")),
     ]

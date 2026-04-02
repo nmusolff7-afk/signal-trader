@@ -1615,10 +1615,25 @@ SOURCE_METHOD_MAP = {
     "CFTC COT":             "fed",
     "FRED":                 "fed",
     "FERC Energy":          "eia",
+    "White House":          "federal_register",
+    "FedReg PrePub":        "federal_register",
+    "BoE":                  "ecb",
     # SEC insider
     "SEC Form 4":           "edgar",
     # Prediction markets
     "Polymarket":           "fed",
+    # Infrastructure / grid
+    "MISO Grid":            "eia",
+    "NRC Reactor":          "noaa",
+    "FAA NAS":              "faa",
+    "CBP Border":           "fed",
+    # Global events / alternative data
+    "GDELT":                "fed",
+    "WHO Outbreak":         "noaa",
+    "FINRA ATS":            "edgar",
+    # DeFi / crypto
+    "dYdX":                 "coinglass",
+    "Mempool":              "onchain",
 }
 
 # Sources where keyword will often fail — send to transformer
