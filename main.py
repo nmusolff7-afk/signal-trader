@@ -198,8 +198,10 @@ async def main() -> None:
     
     config = {
         "EIA_API_KEY": os.environ.get("EIA_API_KEY", ""),
+        "BLS_API_KEY": os.environ.get("BLS_API_KEY", ""),
         "WHALE_ALERT_KEY": os.environ.get("WHALE_ALERT_KEY", ""),
         "COINGLASS_KEY": os.environ.get("COINGLASS_KEY", ""),
+        "ETHERSCAN_API_KEY": os.environ.get("ETHERSCAN_API_KEY", ""),
     }
 
     # 5. Build and start all source tasks

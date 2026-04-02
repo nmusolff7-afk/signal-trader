@@ -1546,6 +1546,7 @@ SOURCE_METHOD_MAP = {
     "ECB RSS":              "ecb",
     "ECB Feed":             "ecb",
     # Macro
+    "BLS":                  "bls",
     "BLS Feed":             "bls",
     "BLS CPI":              "bls",
     "BLS NFP":              "bls",

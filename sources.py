@@ -239,48 +239,6 @@ class FedRssSource(BaseSource):
             })
 
 
-# ═══════════════════════════════════════════════════════
-# BLS FEED (CPI, NFP, PCE)
-# Feed: BLS press releases (no official RSS, use web scrape or email)
-# Scheduled: Monthly (CPI 2nd Thurs), Monthly (NFP 1st Fri), Monthly (PCE)
-# Classifier: keyword path → E032–E036
-# ═══════════════════════════════════════════════════════
-
-class BlsSource(BaseSource):
-    """
-    Fetches BLS major releases: CPI, NFP, PCE.
-    Uses web scraping since BLS doesn't have a public RSS (yet).
-    
-    Scheduled releases:
-      - CPI (all urban consumers): 2nd Thursday of month, 8:30 AM ET
-      - Employment Situation (NFP): 1st Friday of month, 8:30 AM ET
-      - Personal Income & Outlays (PCE): varies, ~last business day of month
-    
-    This implementation checks the BLS press release page for recent postings.
-    FREE. No API key required for press releases.
-    """
-    name = "BLS Feed"
-    interval_seconds = 300.0  # Poll every 5 minutes during scheduled windows
-    
-    # BLS press releases for major economic indicators
-    BLS_PRESS_URL = "https://www.bls.gov/news.release/"
-    
-    async def poll(self) -> None:
-        """
-        LIMITATION: BLS doesn't publish machine-readable RSS for press releases.
-        This is a placeholder that would need either:
-          1. Web scraping (BeautifulSoup) to parse press release HTML
-          2. Email subscription to BLS list + IMAP polling
-          3. Economic calendar API integration (see notes below)
-        
-        For now, we recommend using an economic calendar API (PHASE 2.5).
-        """
-        log.info("[BLS] Placeholder: requires web scraping or email polling. See notes.")
-        # TODO: Implement one of:
-        #   - Selenium/BeautifulSoup web scrape of https://www.bls.gov/news.release/
-        #   - IMAP polling of BLS press release email subscription
-        #   - Integration with free economic calendar API (e.g., economicscalendar.com)
-
 
 # ═══════════════════════════════════════════════════════
 # FEDERAL REGISTER RSS (EPA, Financial Regulation, Crypto Rules)
@@ -403,83 +361,6 @@ class SecPressReleaseSource(BaseSource):
                     "extra_json": json.dumps({"uid": uid}),
                 })
 
-
-# ═══════════════════════════════════════════════════════
-# FDA MedWatch (Drug Approvals & Rejections)
-# API: FDA OpenData / MedWatch API
-# Scheduled: Event-driven (varies by drug)
-# Classifier: keyword path → E057–E060
-# ═══════════════════════════════════════════════════════
-
-class FdaMedWatchSource(BaseSource):
-    """
-    Polls FDA MedWatch for drug approvals, rejections, CRLs, black box warnings.
-    
-    FDA OpenData is free but limited. For real-time monitoring, you'd need:
-      - SEC EDGAR 8-K filings from biotech companies (more reliable)
-      - Paid service like Trecora/Refinitiv
-    
-    This implementation uses FDA's public API endpoints.
-    
-    FREE. No API key required.
-    """
-    name = "FDA MedWatch"
-    interval_seconds = 300.0  # Poll every 5 minutes
-    
-    # FDA Drugs@FDA API for approvals
-    FDA_DRUGS_API = "https://api.fda.gov/drug/event.json"
-    
-    async def poll(self) -> None:
-        """
-        FDA API has rate limits (~1000 req/hour) and doesn't expose approvals well.
-        Better approach: Monitor SEC EDGAR 8-K filings for biotech companies mentioning FDA.
-        
-        This is a placeholder showing the API structure.
-        """
-        log.info("[FDA] Placeholder: FDA API limited. Recommend EDGAR 8-K monitoring instead.")
-        # TODO: Would implement via:
-        #   - EDGAR 8-K monitoring for biotech (see EdgarSource below)
-        #   - Or paid FDA approval database integration
-
-
-# ═══════════════════════════════════════════════════════
-# EDGAR 8-K FILINGS (Insider Activity, M&A, Guidance, Resignations)
-# API: SEC EDGAR REST API
-# Scheduled: Real-time (filed during trading hours)
-# Classifier: keyword path → E048–E053
-# ═══════════════════════════════════════════════════════
-
-class EdgarSource(BaseSource):
-    """
-    Monitors SEC EDGAR for real-time 8-K filings.
-    Detects: insider sells, buybacks, CEO resignations, SEC subpoenas, M&A, guidance cuts.
-    
-    SEC EDGAR API is free and public.
-    For real-time 8-K feeds, you could also use:
-      - Xignite EDGAR API (premium, real-time)
-      - Intrinio (premium, real-time)
-    
-    This implementation polls the SEC EDGAR API for recent 8-Ks.
-    """
-    name = "EDGAR 8-K"
-    interval_seconds = 30.0  # Poll every 30 seconds (8-Ks are time-sensitive)
-    
-    EDGAR_API = "https://www.sec.gov/cgi-bin/browse-edgar"
-    
-    async def poll(self) -> None:
-        """
-        Query recent 8-K filings across all companies.
-        This requires either:
-          1. Bulk download of EDGAR indices (not real-time)
-          2. CIK-by-CIK polling (slow, 10K+ companies)
-          3. Third-party API (Xignite, Intrinio, etc.)
-        
-        For Phase 2, recommend starting with a paid service or
-        implementing a queue of high-volume tickers.
-        """
-        log.info("[EDGAR] Placeholder: Real-time 8-K monitoring requires third-party API or bulk indexing.")
-        # TODO: Implement via Xignite or Intrinio, or
-        #       batch-process EDGAR daily archives for previous day's 8-Ks
 
 
 # ═══════════════════════════════════════════════════════
@@ -1075,1824 +956,316 @@ class CoinGeckoSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
-# BLS (BUREAU OF LABOR STATISTICS) SOURCE
-# Scheduled: Economic releases on published calendar
-# https://www.bls.gov/schedule/
-# Classifier: keyword path → E032–E036 (CPI, NFP, PCE, PPI, wage data)
+# BLS ECONOMIC DATA (REAL)
+# Endpoint: api.bls.gov/publicAPI/v2/timeseries/data/
+# Series: CUUR0000SA0 (CPI-U), CES0000000001 (Total NFP),
+#         WPUFD49104 (PPI Final Demand), CES0500000003 (Avg Hourly Earnings)
+# FREE with key (500 req/day). Without key: 25 req/day.
+# Classifier: keyword path → E032–E036
 # ═══════════════════════════════════════════════════════
 
 class BlsSource(BaseSource):
     """
-    Monitors BLS economic calendar for scheduled releases.
-    Tracks: CPI, NFP (Non-Farm Payroll), PCE, PPI, wage data.
-    
-    Strategy: Poll BLS schedule page for upcoming releases.
-    On release day, emit event with release name + expected time.
-    
-    Events:
-      - E032: CPI release (monthly, 8:30 AM ET, 2nd week)
-      - E033: NFP release (monthly, 8:30 AM ET, 1st Friday)
-      - E034: PCE release (monthly, 8:30 AM ET, 1st week)
-      - E035: PPI release (monthly, 8:30 AM ET, 2nd week)
-      - E036: Employment data / wage growth releases
-    
-    No API key required. Uses public BLS calendar.
+    Polls BLS API v2 for latest economic data releases.
+    Emits when new data point appears for CPI, NFP, PPI, or wages.
+    FREE. Key optional but recommended (25 → 500 req/day).
     """
     name = "BLS"
-    interval_seconds = 600.0  # Check every 10 minutes
-    
-    # Hardcoded schedule mapping (BLS publishes a predictable calendar)
-    # Source: https://www.bls.gov/schedule/
-    BLS_RELEASES = {
-        "CPI": {
-            "event_id": "E032",
-            "time": "08:30 AM ET",
-            "frequency": "monthly",
-            "release_day": "2nd Wednesday",
-            "keywords": ["CPI", "Consumer Price Index", "inflation", "price index"]
-        },
-        "NFP": {
-            "event_id": "E033",
-            "time": "08:30 AM ET",
-            "frequency": "monthly",
-            "release_day": "1st Friday",
-            "keywords": ["NFP", "Non-Farm Payroll", "employment", "jobs report", "payroll"]
-        },
-        "PCE": {
-            "event_id": "E034",
-            "time": "08:30 AM ET",
-            "frequency": "monthly",
-            "release_day": "1st week",
-            "keywords": ["PCE", "Personal Consumption Expenditures", "core PCE"]
-        },
-        "PPI": {
-            "event_id": "E035",
-            "time": "08:30 AM ET",
-            "frequency": "monthly",
-            "release_day": "2nd week",
-            "keywords": ["PPI", "Producer Price Index", "wholesale prices"]
-        },
-        "WAGE_DATA": {
-            "event_id": "E036",
-            "time": "08:30 AM ET",
-            "frequency": "monthly",
-            "release_day": "2nd week",
-            "keywords": ["wage growth", "average hourly earnings", "ECI", "employment cost"]
-        }
+    interval_seconds = 1800.0  # every 30 min (data releases monthly)
+
+    # BLS series IDs
+    SERIES = {
+        "CUUR0000SA0":    ("CPI-U (all urban consumers)",    "CPI"),
+        "CES0000000001":  ("Total Nonfarm Payrolls (NFP)",   "NFP"),
+        "WPUFD49104":     ("PPI Final Demand",               "PPI"),
+        "CES0500000003":  ("Average Hourly Earnings",        "WAGE"),
     }
-    
-    def __init__(self, queue: asyncio.Queue):
+
+    API_URL = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
         super().__init__(queue)
-        self._last_check = None
-    
+        self.api_key = api_key or os.environ.get("BLS_API_KEY", "")
+        self._last_values = {}  # series_id -> (year, period, value)
+
     async def poll(self) -> None:
-        """
-        Check if we're on a known BLS release day.
-        For now, emit synthetic events based on known schedule.
-        
-        TODO: Integrate with BLS API or calendar RSS when available.
-        """
         try:
-            now = datetime.datetime.utcnow()
-            today = now.date()
-            
-            # Skip if we already checked today
-            if self._last_check == today:
-                return
-            
-            self._last_check = today
-            
-            # Hardcoded release dates for 2026 (BLS publishes schedule annually)
-            # Format: (month, day): release_name
-            bls_2026_schedule = {
-                (1, 14): "CPI",           # Jan 14: CPI
-                (1, 30): "NFP",           # Jan 30 (1st Friday): Jobs
-                (2, 11): "CPI",           # Feb 11: CPI
-                (2, 6): "NFP",            # Feb 6 (1st Friday): Jobs
-                (3, 11): "CPI",           # Mar 11: CPI
-                (3, 6): "NFP",            # Mar 6 (1st Friday): Jobs
-                (4, 8): "CPI",            # Apr 8: CPI
-                (4, 3): "NFP",            # Apr 3 (1st Friday): Jobs
-                (5, 13): "CPI",           # May 13: CPI
-                (5, 1): "NFP",            # May 1 (1st Friday): Jobs
-                (6, 10): "CPI",           # Jun 10: CPI
-                (6, 5): "NFP",            # Jun 5 (1st Friday): Jobs
-                (7, 15): "CPI",           # Jul 15: CPI
-                (7, 3): "NFP",            # Jul 3 (1st Friday): Jobs
-                (8, 12): "CPI",           # Aug 12: CPI
-                (8, 1): "NFP",            # Aug 1 (1st Friday): Jobs
-                (9, 9): "CPI",            # Sep 9: CPI
-                (9, 5): "NFP",            # Sep 5 (1st Friday): Jobs
-                (10, 14): "CPI",          # Oct 14: CPI
-                (10, 3): "NFP",           # Oct 3 (1st Friday): Jobs
-                (11, 12): "CPI",          # Nov 12: CPI
-                (11, 7): "NFP",           # Nov 7 (1st Friday): Jobs
-                (12, 9): "CPI",           # Dec 9: CPI
-                (12, 5): "NFP",           # Dec 5 (1st Friday): Jobs
+            payload = {
+                "seriesid": list(self.SERIES.keys()),
+                "latest": True,
             }
-            
-            release_key = (today.month, today.day)
-            if release_key in bls_2026_schedule:
-                release_name = bls_2026_schedule[release_key]
-                release_info = self.BLS_RELEASES.get(release_name, {})
-                
-                if release_info:
+            if self.api_key:
+                payload["registrationkey"] = self.api_key
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self.API_URL,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status != 200:
+                        log.warning("[BLS] HTTP %s", resp.status)
+                        return
+
+                    data = await resp.json()
+
+                results = data.get("Results", {}).get("series", [])
+                for series in results:
+                    sid = series.get("seriesID", "")
+                    points = series.get("data", [])
+                    if not points or sid not in self.SERIES:
+                        continue
+
+                    latest = points[0]  # most recent
+                    year = latest.get("year", "")
+                    period = latest.get("period", "")
+                    value = latest.get("value", "")
+
+                    key = f"{sid}-{year}-{period}-{value}"
+                    if self._already_seen(key):
+                        continue
+
+                    label, short = self.SERIES[sid]
+                    prev = self._last_values.get(sid)
+                    change_text = ""
+                    if prev:
+                        try:
+                            delta = float(value) - float(prev[2])
+                            change_text = f" (change: {delta:+.1f})"
+                        except ValueError:
+                            pass
+                    self._last_values[sid] = (year, period, value)
+
                     await self.emit({
-                        "text": f"BLS {release_name} scheduled for {release_info['time']}",
-                        "release_name": release_name,
-                        "time": release_info["time"],
-                        "event_id_expected": release_info["event_id"],
+                        "text": f"BLS {short}: {label} = {value} ({year} {period}){change_text}",
+                        "series_id": sid,
+                        "series_name": label,
+                        "value": value,
+                        "year": year,
+                        "period": period,
                         "extra_json": json.dumps({
-                            "release": release_name,
-                            "time": release_info["time"],
-                            "event_id": release_info["event_id"]
-                        })
+                            "series_id": sid,
+                            "value": value,
+                            "year": year,
+                            "period": period,
+                        }),
                     })
-            
-            # Also check for PCE (mid-month) and PPI (mid-month) releases
-            if 1 <= today.day <= 7:  # First week
-                if not self._already_seen(f"pce-{today.month}"):
-                    await self.emit({
-                        "text": f"BLS PCE scheduled for early {today.strftime('%B')} at 08:30 AM ET",
-                        "release_name": "PCE",
-                        "time": "08:30 AM ET",
-                        "event_id_expected": "E034",
-                        "extra_json": json.dumps({
-                            "release": "PCE",
-                            "time": "08:30 AM ET",
-                            "event_id": "E034"
-                        })
-                    })
-            
-            if 8 <= today.day <= 14:  # Second week (PPI typically)
-                if not self._already_seen(f"ppi-{today.month}"):
-                    await self.emit({
-                        "text": f"BLS PPI scheduled for mid {today.strftime('%B')} at 08:30 AM ET",
-                        "release_name": "PPI",
-                        "time": "08:30 AM ET",
-                        "event_id_expected": "E035",
-                        "extra_json": json.dumps({
-                            "release": "PPI",
-                            "time": "08:30 AM ET",
-                            "event_id": "E035"
-                        })
-                    })
-        
+
         except Exception as e:
-            log.warning("[BLS] poll error: %s", e)
+            log.warning("[BLS] Error: %s", e)
 
 
 # ═══════════════════════════════════════════════════════
-# FAA NOTAM SOURCE
-# Real-time: Airspace restrictions, airport closures, hazards
-# https://www.faa.gov/air_traffic/publications/notices/
-# Classifier: keyword path → E037–E040 (airspace, airport, hazard, traffic)
-# ═══════════════════════════════════════════════════════
-
-class FaaNotamSource(BaseSource):
-    """
-    Monitors FAA NOTAM (Notices to Airmen) feed for airspace restrictions,
-    airport closures, and hazards.
-    
-    Impact: Changes to major US airspace/airports affect:
-      - Aviation fuel demand (jet fuel prices)
-      - Commercial airline operations (economic data)
-      - Cargo movements (supply chain proxies)
-      - Crude oil transport delays (logistics)
-    
-    Strategy: Poll FAA FDC NOTAM Search API for active NOTAMs.
-    Filter for high-impact: airport closures, airspace restrictions, hazards.
-    
-    Events:
-      - E037: Airspace restriction (TFR, military ops, weather)
-      - E038: Airport closure (runway, facility shutdown)
-      - E039: Hazard alert (debris, wildlife, equipment)
-      - E040: Traffic management (ground stop, flow control)
-    
-    FREE API. No API key required — uses public FAA endpoints.
-    """
-    name = "FAA NOTAM"
-    interval_seconds = 300.0  # Check every 5 minutes
-    
-    FAA_NOTAM_URL = "https://www.notams.faa.gov/dinsQueryWeb/"
-    
-    # Keywords mapping for each event type
-    EVENT_KEYWORDS = {
-        "E037": {  # Airspace restriction
-            "keywords": ["TFR", "temporary flight restriction", "airspace", "military operations", "restricted airspace"],
-            "description": "Airspace Restriction"
-        },
-        "E038": {  # Airport closure
-            "keywords": ["airport closed", "closure", "runway closed", "facility closed", "inoperative"],
-            "description": "Airport Closure"
-        },
-        "E039": {  # Hazard alert
-            "keywords": ["debris", "hazard", "wildlife", "equipment failure", "emergency"],
-            "description": "Hazard Alert"
-        },
-        "E040": {  # Traffic management
-            "keywords": ["ground stop", "flow control", "traffic management", "delay", "congestion"],
-            "description": "Traffic Management"
-        }
-    }
-    
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._last_notams = {}  # Track last seen NOTAMs by area
-    
-    async def poll(self) -> None:
-        """
-        Poll FAA NOTAM feed for active restrictions.
-        Since FDC NOTAM Search API may be limited, use fallback strategy:
-        emit synthetic NOTAMs for major US airspace areas.
-        """
-        try:
-            # Strategy: Emit periodic synthetic NOTAMs for major US regions
-            # Real implementation would scrape https://www.notams.faa.gov/ or use API
-            
-            now = datetime.datetime.utcnow()
-            hour = now.hour
-            
-            # Emit synthetic NOTAMs for major regions (simulating real-time feed)
-            # In production, replace with actual FAA API calls
-            
-            major_areas = [
-                "New York (NYC, EWR, LGA)",
-                "Los Angeles (LAX, BUR, LGB)",
-                "Chicago (ORD, MDW)",
-                "Dallas (DFW, DAL)",
-                "Atlanta (ATL)",
-            ]
-            
-            # Randomly emit a NOTAM-like event for a major area
-            # (In production: parse actual FAA NOTAM feed)
-            for area in major_areas:
-                # Create a daily key per area (emit once per area per day)
-                key = f"notam-{area}-{now.date()}"
-                
-                if not self._already_seen(key):
-                    # Emit a generic airspace restriction event
-                    await self.emit({
-                        "text": f"FAA NOTAM: Airspace restriction in effect for {area}",
-                        "area": area,
-                        "notam_type": "airspace_restriction",
-                        "event_id_expected": "E037",
-                        "extra_json": json.dumps({
-                            "area": area,
-                            "type": "airspace_restriction",
-                            "event_id": "E037"
-                        })
-                    })
-        
-        except Exception as e:
-            log.warning("[FAA NOTAM] poll error: %s", e)
-
-
-# ═══════════════════════════════════════════════════════
-# PACER SOURCE
-# Real-time: Federal court filings, bankruptcy, litigation
-# https://www.pacer.gov/
-# Classifier: keyword path → E041–E045 (bankruptcy, litigation, enforcement)
-# ═══════════════════════════════════════════════════════
-
-class PacerSource(BaseSource):
-    """
-    Monitors PACER (Public Access to Court Electronic Records) for federal court filings.
-    Tracks: bankruptcy filings, litigation events, enforcement actions.
-    
-    Impact: Major court filings signal market-moving events:
-      - Bankruptcy filings (debt restructuring, asset sales)
-      - Litigation (IP disputes, antitrust, fraud charges)
-      - Enforcement actions (SEC, FTC, DOJ charges)
-      - Patent disputes (tech sector volatility)
-      - Settlement announcements (liability estimates)
-    
-    Strategy: Poll major US courts for recent filings.
-    Focus on high-impact courts: S.D. NY, N.D. Cal, D. Del.
-    
-    Events:
-      - E041: Bankruptcy filing (Chapter 7, 11, 13)
-      - E042: Litigation event (lawsuit filed, judgment issued)
-      - E043: Enforcement action (SEC charges, DOJ suit, FTC violation)
-      - E044: Patent dispute (patent infringement case, USPTO decision)
-      - E045: Major settlement (settlement agreement, judgment amount)
-    
-    FREE API. No API key required — uses public PACER RSS and web pages.
-    """
-    name = "PACER"
-    interval_seconds = 600.0  # Check every 10 minutes
-    
-    PACER_BASE_URL = "https://www.pacer.gov/"
-    
-    # Major US Federal Courts (high market impact)
-    MAJOR_COURTS = {
-        "sdny": {
-            "name": "S.D. New York",
-            "rss": "https://www.nysd.uscourts.gov/",
-            "keywords": ["bankruptcy", "litigation", "settlement"]
-        },
-        "ndca": {
-            "name": "N.D. California",
-            "rss": "https://www.cand.uscourts.gov/",
-            "keywords": ["patent", "IP", "tech", "litigation"]
-        },
-        "ded": {
-            "name": "D. Delaware",
-            "rss": "https://www.ded.uscourts.gov/",
-            "keywords": ["patent", "corporate", "M&A", "litigation"]
-        }
-    }
-    
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._last_filing_count = {}
-    
-    async def poll(self) -> None:
-        """
-        Poll PACER for recent federal court filings.
-        Strategy: Emit synthetic filings for major courts (simulating real-time feed).
-        
-        In production: Integrate with PACER Case Locator API or scrape RSS feeds
-        from individual courts.
-        """
-        try:
-            now = datetime.datetime.utcnow()
-            today = now.date()
-            
-            # Emit periodic court filings for major courts
-            # (In production: parse actual PACER RSS/API)
-            
-            # Emit one bankruptcy event per day for each major court
-            for court_id, court_info in self.MAJOR_COURTS.items():
-                key_bankruptcy = f"pacer-bankruptcy-{court_id}-{today}"
-                
-                if not self._already_seen(key_bankruptcy):
-                    await self.emit({
-                        "text": f"PACER: Bankruptcy filing in {court_info['name']}",
-                        "court": court_info["name"],
-                        "case_type": "bankruptcy",
-                        "event_id_expected": "E041",
-                        "extra_json": json.dumps({
-                            "court": court_info["name"],
-                            "type": "bankruptcy",
-                            "event_id": "E041"
-                        })
-                    })
-                
-                # Emit one litigation event per day
-                key_litigation = f"pacer-litigation-{court_id}-{today}"
-                
-                if not self._already_seen(key_litigation):
-                    await self.emit({
-                        "text": f"PACER: Litigation event in {court_info['name']}",
-                        "court": court_info["name"],
-                        "case_type": "litigation",
-                        "event_id_expected": "E042",
-                        "extra_json": json.dumps({
-                            "court": court_info["name"],
-                            "type": "litigation",
-                            "event_id": "E042"
-                        })
-                    })
-            
-            # Emit one enforcement action every 2 days
-            if now.day % 2 == 0:
-                key_enforcement = f"pacer-enforcement-{today}"
-                
-                if not self._already_seen(key_enforcement):
-                    await self.emit({
-                        "text": "PACER: Federal enforcement action (SEC/DOJ/FTC)",
-                        "case_type": "enforcement",
-                        "event_id_expected": "E043",
-                        "extra_json": json.dumps({
-                            "type": "enforcement",
-                            "event_id": "E043"
-                        })
-                    })
-            
-            # Emit patent dispute every 3 days
-            if now.day % 3 == 0:
-                key_patent = f"pacer-patent-{today}"
-                
-                if not self._already_seen(key_patent):
-                    await self.emit({
-                        "text": "PACER: Patent infringement case filed",
-                        "case_type": "patent",
-                        "event_id_expected": "E044",
-                        "extra_json": json.dumps({
-                            "type": "patent",
-                            "event_id": "E044"
-                        })
-                    })
-            
-            # Emit settlement every 5 days
-            if now.day % 5 == 0:
-                key_settlement = f"pacer-settlement-{today}"
-                
-                if not self._already_seen(key_settlement):
-                    await self.emit({
-                        "text": "PACER: Major settlement agreement announced",
-                        "case_type": "settlement",
-                        "event_id_expected": "E045",
-                        "extra_json": json.dumps({
-                            "type": "settlement",
-                            "event_id": "E045"
-                        })
-                    })
-        
-        except Exception as e:
-            log.warning("[PACER] poll error: %s", e)
-
-
-# ═══════════════════════════════════════════════════════
-# FDA MEDWATCH SOURCE
-# Real-time: Drug approvals, rejections, recalls, warnings
-# https://www.fda.gov/drugs/drug-safety-and-availability/medwatch
-# Classifier: keyword path → E046–E050 (approval, rejection, recall, warning, trial halt)
+# FDA MEDWATCH SOURCE (REAL)
+# Feed: FDA Safety Recalls RSS + openFDA drug enforcement API
+# FREE. No API key required.
+# Classifier: keyword path → E046–E050
 # ═══════════════════════════════════════════════════════
 
 class FdaMedwatchSource(BaseSource):
     """
-    Monitors FDA MedWatch for drug safety notifications.
-    Tracks: approvals, rejections, recalls, warning letters, clinical trial halts.
-    
-    Impact: FDA drug actions signal pharmaceutical sector volatility:
-      - Approvals (positive catalyst for biotech/pharma)
-      - Rejections (negative catalyst, stock drop)
-      - Recalls/withdrawals (immediate selling pressure)
-      - Warning letters (regulatory pressure, future uncertainty)
-      - Clinical trial halts (safety concerns, major liability)
-    
-    Strategy: Poll FDA MedWatch RSS and Press Release feeds.
-    Monitor major pharma/biotech companies and drug categories.
-    
-    Events:
-      - E046: Drug approval (NDA approval, BLA approval)
-      - E047: Drug rejection (NDA refusal, approvability concerns)
-      - E048: Recall/withdrawal (drug withdrawn, market removal)
-      - E049: Warning letter (regulatory warning, compliance action)
-      - E050: Clinical trial halt (safety review, trial suspension)
-    
-    FREE API. No API key required — uses public FDA endpoints and RSS.
+    Polls FDA recall/safety RSS feed and openFDA enforcement API.
+    Emits real drug recalls, withdrawals, and safety alerts.
+    FREE. No API key required.
     """
     name = "FDA MedWatch"
-    interval_seconds = 900.0  # Check every 15 minutes
-    
-    FDA_MEDWATCH_URL = "https://www.fda.gov/drugs/drug-safety-and-availability/medwatch"
-    FDA_PRESS_URL = "https://www.fda.gov/news-events/news-feed"
-    
-    # Major pharma/biotech companies monitored
-    PHARMA_COMPANIES = [
-        "Pfizer", "Moderna", "Merck", "AbbVie", "Johnson & Johnson",
-        "Eli Lilly", "Bristol Myers", "AstraZeneca", "Roche", "Novartis",
-        "Amgen", "Regeneron", "Vertex", "Gilead", "Biogen"
-    ]
-    
-    # Drug categories with high market impact
-    DRUG_CATEGORIES = [
-        "cancer", "diabetes", "heart disease", "COVID", "respiratory",
-        "autoimmune", "infectious disease", "vaccine", "biologics"
-    ]
-    
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._last_company_check = {}
-    
+    interval_seconds = 900.0  # every 15 min
+
+    RECALL_RSS = "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/recalls/rss.xml"
+    ENFORCEMENT_API = "https://api.fda.gov/drug/enforcement.json?sort=report_date:desc&limit=5"
+
     async def poll(self) -> None:
-        """
-        Poll FDA MedWatch for drug safety notifications.
-        Strategy: Emit synthetic notifications for major companies (simulating real-time feed).
-        
-        In production: Parse FDA MedWatch RSS feeds and press release pages
-        for actual notifications.
-        """
+        # ── RSS feed for recalls/safety alerts ──
         try:
-            now = datetime.datetime.utcnow()
-            today = now.date()
-            
-            # Emit periodic FDA notifications for major pharma companies
-            # (In production: parse actual FDA RSS/API)
-            
-            # Emit one approval event per major company per week
-            for company in self.PHARMA_COMPANIES:
-                key_approval = f"fda-approval-{company}-{now.isocalendar()[1]}"  # Weekly
-                
-                if not self._already_seen(key_approval):
-                    # Emit on specific days of week (spread out)
-                    if now.weekday() == (hash(company) % 7):  # Deterministic but spread out
-                        await self.emit({
-                            "text": f"FDA: Drug approval for {company}",
-                            "company": company,
-                            "action": "approval",
-                            "event_id_expected": "E046",
-                            "extra_json": json.dumps({
-                                "company": company,
-                                "action": "approval",
-                                "event_id": "E046"
-                            })
-                        })
-            
-            # Emit one rejection event every 2 weeks
-            key_rejection = f"fda-rejection-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_rejection):
-                if now.day % 14 < 1:  # Every 2 weeks
-                    await self.emit({
-                        "text": "FDA: Drug rejection / approvability concerns",
-                        "action": "rejection",
-                        "event_id_expected": "E047",
-                        "extra_json": json.dumps({
-                            "action": "rejection",
-                            "event_id": "E047"
-                        })
-                    })
-            
-            # Emit one recall event every 3 weeks
-            key_recall = f"fda-recall-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_recall):
-                if now.day % 21 < 1:  # Every 3 weeks
-                    await self.emit({
-                        "text": "FDA: Drug recall / market withdrawal",
-                        "action": "recall",
-                        "event_id_expected": "E048",
-                        "extra_json": json.dumps({
-                            "action": "recall",
-                            "event_id": "E048"
-                        })
-                    })
-            
-            # Emit one warning letter per month
-            key_warning = f"fda-warning-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_warning):
-                if now.day == 15:  # Mid-month
-                    await self.emit({
-                        "text": "FDA: Warning letter issued (regulatory violation)",
-                        "action": "warning_letter",
-                        "event_id_expected": "E049",
-                        "extra_json": json.dumps({
-                            "action": "warning_letter",
-                            "event_id": "E049"
-                        })
-                    })
-            
-            # Emit clinical trial halt every 2 weeks
-            key_trial = f"fda-trial-halt-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_trial):
-                if now.day % 14 == 7:  # Every 2 weeks, mid-cycle
-                    await self.emit({
-                        "text": "FDA: Clinical trial halted (safety review)",
-                        "action": "trial_halt",
-                        "event_id_expected": "E050",
-                        "extra_json": json.dumps({
-                            "action": "trial_halt",
-                            "event_id": "E050"
-                        })
-                    })
-        
+            loop = asyncio.get_event_loop()
+            feed = await loop.run_in_executor(None, feedparser.parse, self.RECALL_RSS)
+
+            for entry in feed.entries[:10]:
+                uid = entry.get("id") or entry.get("link", "")
+                if self._already_seen(uid):
+                    continue
+
+                title = entry.get("title", "")
+                summary = entry.get("summary", "")
+                text = f"{title}. {summary}".strip()
+
+                await self.emit({
+                    "text": f"FDA Recall: {text[:200]}",
+                    "title": title,
+                    "link": entry.get("link", ""),
+                    "extra_json": json.dumps({"uid": uid, "source": "fda_rss"}),
+                })
         except Exception as e:
-            log.warning("[FDA MedWatch] poll error: %s", e)
+            log.warning("[FDA MedWatch] RSS error: %s", e)
+
+        # ── openFDA enforcement API for drug enforcement actions ──
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    self.ENFORCEMENT_API,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        return
+
+                    data = await resp.json()
+                    for result in data.get("results", []):
+                        recall_id = result.get("recall_number", "")
+                        if not recall_id or self._already_seen(recall_id):
+                            continue
+
+                        reason = result.get("reason_for_recall", "")
+                        product = result.get("product_description", "")[:100]
+                        classification = result.get("classification", "")
+                        status = result.get("status", "")
+
+                        await self.emit({
+                            "text": f"FDA Enforcement: {classification} — {reason[:150]}",
+                            "recall_number": recall_id,
+                            "product": product,
+                            "classification": classification,
+                            "status": status,
+                            "extra_json": json.dumps({
+                                "recall_number": recall_id,
+                                "classification": classification,
+                                "status": status,
+                                "source": "openfda",
+                            }),
+                        })
+        except Exception as e:
+            log.warning("[FDA MedWatch] API error: %s", e)
 
 
 # ═══════════════════════════════════════════════════════
-# SEC ENFORCEMENT SOURCE
-# Real-time: Trading halts, enforcement actions, charges, ETF approvals
-# https://www.sec.gov/litigation/
-# Classifier: keyword path → E051–E055 (trading halt, enforcement, charges, ETF, decision)
+# SEC ENFORCEMENT SOURCE (REAL)
+# Feeds: SEC Litigation Releases RSS + Press Releases RSS
+# FREE. No API key required.
+# Classifier: keyword path → E051–E055
 # ═══════════════════════════════════════════════════════
 
 class SecEnforcementSource(BaseSource):
     """
-    Monitors SEC enforcement actions, trading halts, and regulatory decisions.
-    Tracks: trading halts, enforcement actions, charges, ETF approvals, regulatory decisions.
-    
-    Impact: SEC actions signal immediate market volatility:
-      - Trading halts (stock drops immediately on suspension)
-      - Enforcement actions (fraud charges, insider trading)
-      - Civil suits (liability liability, damage estimates)
-      - ETF approvals (crypto/commodities access, buying pressure)
-      - Regulatory decisions (rule changes, policy shifts)
-    
-    Strategy: Poll SEC Press Releases, Trading Halts, Litigation.
-    Monitor major companies, exchanges, asset classes.
-    
-    Events:
-      - E051: Trading halt (SEC suspension, stock delisting)
-      - E052: Enforcement action (investigation, subpoena, order)
-      - E053: Charges/civil suit (fraud, insider trading, market manipulation)
-      - E054: ETF approval (spot bitcoin, commodities, new asset class)
-      - E055: Regulatory decision (rule change, approval, policy shift)
-    
-    FREE API. No API key required — uses public SEC endpoints and press releases.
+    Polls SEC litigation releases and press releases RSS.
+    Emits real enforcement actions, trading halts, charges.
+    FREE. No API key required.
     """
     name = "SEC Enforcement"
-    interval_seconds = 1200.0  # Check every 20 minutes
-    
-    SEC_PRESS_URL = "https://www.sec.gov/news/press-release"
-    SEC_LITIGATION_URL = "https://www.sec.gov/litigation/"
-    SEC_HALTS_URL = "https://www.sec.gov/cgi-bin/browse-edgar"
-    
-    # Major exchanges and markets
-    MAJOR_EXCHANGES = [
-        "NYSE", "NASDAQ", "CBOE", "CME", "CBOT"
-    ]
-    
-    # Major regulated asset classes
-    ASSET_CLASSES = [
-        "stocks", "crypto", "ETF", "commodities", "derivatives",
-        "bonds", "structured products", "CLOs", "stablecoins"
-    ]
-    
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._last_halt_check = {}
-    
+    interval_seconds = 1200.0  # every 20 min
+
+    FEEDS = {
+        "litigation": "https://www.sec.gov/rss/litigation/litreleases.xml",
+        "press":      "https://www.sec.gov/news/pressreleases.rss",
+    }
+
     async def poll(self) -> None:
-        """
-        Poll SEC for enforcement actions and regulatory events.
-        Strategy: Emit synthetic notifications (simulating real-time feed).
-        
-        In production: Parse SEC Press Release RSS, Litigation page,
-        and Trading Halts feed for actual notifications.
-        """
-        try:
-            now = datetime.datetime.utcnow()
-            today = now.date()
-            
-            # Emit periodic SEC enforcement notifications
-            # (In production: parse actual SEC RSS/API)
-            
-            # Emit one trading halt per week
-            key_halt = f"sec-halt-{now.isocalendar()[1]}"  # Weekly
-            
-            if not self._already_seen(key_halt):
-                if now.weekday() == 0:  # Mondays
+        loop = asyncio.get_event_loop()
+
+        for feed_name, url in self.FEEDS.items():
+            try:
+                feed = await loop.run_in_executor(None, feedparser.parse, url)
+
+                for entry in feed.entries[:10]:
+                    uid = entry.get("id") or entry.get("link", "")
+                    if self._already_seen(uid):
+                        continue
+
+                    title = entry.get("title", "")
+                    summary = entry.get("summary", "")
+                    text = f"{title}. {summary}".strip()
+
                     await self.emit({
-                        "text": "SEC: Trading halt issued for listed security",
-                        "action": "trading_halt",
-                        "event_id_expected": "E051",
+                        "text": f"SEC {feed_name}: {text[:200]}",
+                        "title": title,
+                        "link": entry.get("link", ""),
+                        "feed": feed_name,
                         "extra_json": json.dumps({
-                            "action": "trading_halt",
-                            "event_id": "E051"
-                        })
+                            "uid": uid,
+                            "feed": feed_name,
+                        }),
                     })
-            
-            # Emit one enforcement action per week
-            key_enforcement = f"sec-enforcement-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_enforcement):
-                if now.weekday() == 2:  # Wednesdays
-                    await self.emit({
-                        "text": "SEC: Enforcement action announced (investigation, subpoena)",
-                        "action": "enforcement",
-                        "event_id_expected": "E052",
-                        "extra_json": json.dumps({
-                            "action": "enforcement",
-                            "event_id": "E052"
-                        })
-                    })
-            
-            # Emit one charges/civil suit per week
-            key_charges = f"sec-charges-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_charges):
-                if now.weekday() == 1:  # Tuesdays
-                    await self.emit({
-                        "text": "SEC: Charges filed (fraud, insider trading, market manipulation)",
-                        "action": "charges",
-                        "event_id_expected": "E053",
-                        "extra_json": json.dumps({
-                            "action": "charges",
-                            "event_id": "E053"
-                        })
-                    })
-            
-            # Emit one ETF approval per month
-            key_etf = f"sec-etf-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_etf):
-                if now.day == 10:  # 10th of each month
-                    await self.emit({
-                        "text": "SEC: ETF approval (spot bitcoin, commodities, new asset class)",
-                        "action": "etf_approval",
-                        "event_id_expected": "E054",
-                        "extra_json": json.dumps({
-                            "action": "etf_approval",
-                            "event_id": "E054"
-                        })
-                    })
-            
-            # Emit one regulatory decision per month
-            key_decision = f"sec-decision-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_decision):
-                if now.day == 20:  # 20th of each month
-                    await self.emit({
-                        "text": "SEC: Regulatory decision (rule change, approval, policy shift)",
-                        "action": "regulatory_decision",
-                        "event_id_expected": "E055",
-                        "extra_json": json.dumps({
-                            "action": "regulatory_decision",
-                            "event_id": "E055"
-                        })
-                    })
-        
-        except Exception as e:
-            log.warning("[SEC Enforcement] poll error: %s", e)
+            except Exception as e:
+                log.warning("[SEC Enforcement] %s feed error: %s", feed_name, e)
 
 
 # ═══════════════════════════════════════════════════════
-# FCC ENFORCEMENT SOURCE
-# Real-time: Telecom fines, spectrum auctions, enforcement actions
-# https://www.fcc.gov/enforcement/
-# Classifier: keyword path → E056–E060 (fine, auction, enforcement, order, denial)
-# ═══════════════════════════════════════════════════════
-
-class FccEnforcementSource(BaseSource):
-    """
-    Monitors FCC enforcement actions, spectrum auctions, and compliance orders.
-    Tracks: fines, spectrum auctions, enforcement actions, compliance orders, license decisions.
-    
-    Impact: FCC actions signal telecom sector volatility:
-      - Fines/forfeitures (cost to company, stock impact)
-      - Spectrum auctions (access to new frequencies, capex implications)
-      - Enforcement actions (compliance pressure, future risk)
-      - Compliance orders (operational restrictions, upside/downside)
-      - License denials/revocations (business model threat)
-    
-    Strategy: Poll FCC Enforcement Bureau, Spectrum Auctions, EFIS (Electronic Filing Info System).
-    Monitor major telecom companies and spectrum bands.
-    
-    Events:
-      - E056: FCC fine/forfeiture (monetary penalty, compliance violation)
-      - E057: Spectrum auction (C-band, mmWave, unlicensed, access to new frequencies)
-      - E058: Enforcement action (investigation, notice of violation)
-      - E059: Compliance order (operational restriction, remediation required)
-      - E060: License denial/revocation (business model threat)
-    
-    FREE API. No API key required — uses public FCC endpoints.
-    """
-    name = "FCC Enforcement"
-    interval_seconds = 1800.0  # Check every 30 minutes
-    
-    FCC_ENFORCEMENT_URL = "https://www.fcc.gov/enforcement/"
-    FCC_AUCTION_URL = "https://www.fcc.gov/auctions/"
-    FCC_EFIS_URL = "https://www.fcc.gov/cgi-bin/ws.exe"
-    
-    # Major telecom companies monitored
-    TELECOM_COMPANIES = [
-        "Verizon", "AT&T", "T-Mobile", "Sprint", "Charter",
-        "Comcast", "Cox", "Dish", "Altafiber", "Cincinnati Bell"
-    ]
-    
-    # Spectrum bands of interest
-    SPECTRUM_BANDS = [
-        "C-band", "mmWave", "5G", "6G", "unlicensed", "WiFi",
-        "UWB", "CBRS", "satellite"
-    ]
-    
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._last_auction_check = {}
-    
-    async def poll(self) -> None:
-        """
-        Poll FCC for enforcement actions and spectrum events.
-        Strategy: Emit synthetic notifications (simulating real-time feed).
-        
-        In production: Parse FCC Enforcement Bureau RSS, Auction notices,
-        and EFIS filings for actual notifications.
-        """
-        try:
-            now = datetime.datetime.utcnow()
-            today = now.date()
-            
-            # Emit periodic FCC enforcement notifications
-            # (In production: parse actual FCC feeds)
-            
-            # Emit one fine/forfeiture per week
-            key_fine = f"fcc-fine-{now.isocalendar()[1]}"  # Weekly
-            
-            if not self._already_seen(key_fine):
-                if now.weekday() == 0:  # Mondays
-                    await self.emit({
-                        "text": "FCC: Fine/forfeiture issued for telecom company",
-                        "action": "fine",
-                        "event_id_expected": "E056",
-                        "extra_json": json.dumps({
-                            "action": "fine",
-                            "event_id": "E056"
-                        })
-                    })
-            
-            # Emit one spectrum auction per quarter
-            key_auction = f"fcc-auction-{now.year}-Q{(now.month-1)//3 + 1}"
-            
-            if not self._already_seen(key_auction):
-                if now.month in [1, 4, 7, 10] and now.day == 5:  # First Friday of quarter months
-                    await self.emit({
-                        "text": "FCC: Spectrum auction announced (C-band, mmWave, unlicensed)",
-                        "action": "spectrum_auction",
-                        "event_id_expected": "E057",
-                        "extra_json": json.dumps({
-                            "action": "spectrum_auction",
-                            "event_id": "E057"
-                        })
-                    })
-            
-            # Emit one enforcement action per week
-            key_enforcement = f"fcc-enforcement-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_enforcement):
-                if now.weekday() == 2:  # Wednesdays
-                    await self.emit({
-                        "text": "FCC: Enforcement action (investigation, notice of violation)",
-                        "action": "enforcement",
-                        "event_id_expected": "E058",
-                        "extra_json": json.dumps({
-                            "action": "enforcement",
-                            "event_id": "E058"
-                        })
-                    })
-            
-            # Emit one compliance order per 2 weeks
-            key_compliance = f"fcc-compliance-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_compliance):
-                if now.weekday() == 3 and now.day % 14 < 7:  # Every 2 weeks on Thursdays
-                    await self.emit({
-                        "text": "FCC: Compliance order (operational restriction, remediation required)",
-                        "action": "compliance_order",
-                        "event_id_expected": "E059",
-                        "extra_json": json.dumps({
-                            "action": "compliance_order",
-                            "event_id": "E059"
-                        })
-                    })
-            
-            # Emit one license decision per month
-            key_license = f"fcc-license-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_license):
-                if now.day == 15:  # Mid-month
-                    await self.emit({
-                        "text": "FCC: License decision (denial, revocation, modification)",
-                        "action": "license_decision",
-                        "event_id_expected": "E060",
-                        "extra_json": json.dumps({
-                            "action": "license_decision",
-                            "event_id": "E060"
-                        })
-                    })
-        
-        except Exception as e:
-            log.warning("[FCC Enforcement] poll error: %s", e)
-
-
-# ═══════════════════════════════════════════════════════
-# NOAA SPACE WEATHER SOURCE
-# Real-time: Geomagnetic storms, solar flares, coronal mass ejections
-# https://www.swpc.noaa.gov/
-# Classifier: keyword path → E061–E065 (geomag, flare, CME, radiation, wind shock)
+# NOAA SPACE WEATHER SOURCE (REAL)
+# Endpoint: services.swpc.noaa.gov/json/planetary_k_index_1m.json
+# FREE, no API key. Returns latest Kp index readings.
+# Kp >= 5 -> G1 storm, Kp >= 7 -> G3, Kp >= 8 -> G4, Kp >= 9 -> G5
+# Classifier: keyword path -> E085-E086
 # ═══════════════════════════════════════════════════════
 
 class NoaaSpaceWeatherSource(BaseSource):
     """
-    Monitors NOAA Space Weather Prediction Center for space weather events.
-    Tracks: geomagnetic storms (G4/G5), solar flares, CME, radiation storms, solar wind shocks.
-    
-    Impact: Space weather affects satellite operations and power grids (indirect market impact):
-      - Geomagnetic storms (G4/G5): Satellite downtime, GPS disruption, power grid stress
-      - Solar flares: Radio blackouts, communication disruptions
-      - Coronal mass ejections: Major geomagnetic disturbances, extended outages
-      - Radiation storms: Satellite damage, airline crew radiation exposure
-      - Solar wind shocks: Sudden magnetosphere compression, rapid system stress
-    
-    Strategy: Poll NOAA Space Weather Prediction Center alerts (24/7 updates).
-    Monitor K-index, flux, solar wind speed, X-ray flux for threshold breaches.
-    
-    Events:
-      - E061: Geomagnetic storm (G4 "Severe" or G5 "Extreme")
-      - E062: Solar flare (X-class or major M-class)
-      - E063: Coronal mass ejection (CME) headed to Earth
-      - E064: Radiation storm (S4 "Severe" or higher)
-      - E065: Solar wind shock / interplanetary shock
-    
-    FREE API. No API key required — uses public NOAA endpoints.
+    Polls NOAA SWPC for real Kp-index data (geomagnetic activity).
+    Emits events when Kp reaches storm thresholds.
+    FREE. No API key required.
     """
     name = "NOAA Space Weather"
-    interval_seconds = 1800.0  # Check every 30 minutes
-    
-    NOAA_SWPC_URL = "https://www.swpc.noaa.gov/"
-    NOAA_ALERTS_URL = "https://www.swpc.noaa.gov/products/alerts-watches-warnings"
-    
-    # Space weather severity scales
-    SEVERITY_LEVELS = {
-        "G1": "Minor",
-        "G2": "Moderate",
-        "G3": "Strong",
-        "G4": "Severe",
-        "G5": "Extreme",
-        "X1": "X-class solar flare",
-        "M1": "M-class solar flare",
-        "S4": "Severe radiation",
-        "S5": "Extreme radiation"
-    }
-    
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._last_alert_check = {}
-    
+    interval_seconds = 900.0  # every 15 min
+
+    KP_URL = "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
+
+    THRESHOLDS = [
+        (9, "G5 Extreme"),
+        (8, "G4 Severe"),
+        (7, "G3 Strong"),
+        (6, "G2 Moderate"),
+        (5, "G1 Minor"),
+    ]
+
     async def poll(self) -> None:
-        """
-        Poll NOAA Space Weather Prediction Center for alerts.
-        Strategy: Emit synthetic space weather notifications (simulating real-time feed).
-        
-        In production: Parse NOAA SWPC alerts feed, K-index data, X-ray flux,
-        solar wind speed from DSCOVR satellite data.
-        """
         try:
-            now = datetime.datetime.utcnow()
-            today = now.date()
-            
-            # Emit periodic space weather events
-            # (In production: parse actual NOAA SWPC alerts and real-time data)
-            
-            # Emit one geomagnetic storm per week (G4+)
-            key_geomag = f"noaa-geomag-{now.isocalendar()[1]}"  # Weekly
-            
-            if not self._already_seen(key_geomag):
-                if now.weekday() == 2:  # Wednesdays (mid-week activity peak)
-                    await self.emit({
-                        "text": "NOAA: Geomagnetic storm (G4 Severe or G5 Extreme)",
-                        "event_type": "geomagnetic_storm",
-                        "severity": "G4-G5",
-                        "event_id_expected": "E061",
-                        "extra_json": json.dumps({
-                            "type": "geomagnetic_storm",
-                            "severity": "G4-G5",
-                            "event_id": "E061"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    self.KP_URL,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        return
+
+                    data = await resp.json()
+                    if not data:
+                        return
+
+                    latest = data[-1]
+                    kp = float(latest.get("kp_index", 0))
+                    ts = latest.get("time_tag", "")
+
+                    key = f"kp-{ts}-{kp}"
+                    if self._already_seen(key):
+                        return
+
+                    level = None
+                    for threshold, label in self.THRESHOLDS:
+                        if kp >= threshold:
+                            level = label
+                            break
+
+                    if level:
+                        await self.emit({
+                            "text": f"NOAA: Kp={kp:.1f} - {level} geomagnetic storm",
+                            "kp_index": kp,
+                            "storm_level": level,
+                            "extra_json": json.dumps({
+                                "kp_index": kp,
+                                "storm_level": level,
+                                "time_tag": ts,
+                            }),
                         })
-                    })
-            
-            # Emit one solar flare per 2 weeks (X-class or major M-class)
-            key_flare = f"noaa-flare-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_flare):
-                if now.day % 14 < 1:  # Every 2 weeks
-                    await self.emit({
-                        "text": "NOAA: Solar flare (X-class or major M-class)",
-                        "event_type": "solar_flare",
-                        "severity": "X-M",
-                        "event_id_expected": "E062",
-                        "extra_json": json.dumps({
-                            "type": "solar_flare",
-                            "severity": "X-M",
-                            "event_id": "E062"
+                    else:
+                        await self.emit({
+                            "text": f"NOAA: Kp={kp:.1f} - quiet geomagnetic conditions",
+                            "kp_index": kp,
+                            "storm_level": "quiet",
+                            "extra_json": json.dumps({
+                                "kp_index": kp,
+                                "time_tag": ts,
+                            }),
                         })
-                    })
-            
-            # Emit one coronal mass ejection per 3 weeks
-            key_cme = f"noaa-cme-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_cme):
-                if now.day % 21 < 1:  # Every 3 weeks
-                    await self.emit({
-                        "text": "NOAA: Coronal mass ejection (CME) headed to Earth",
-                        "event_type": "coronal_mass_ejection",
-                        "severity": "High",
-                        "event_id_expected": "E063",
-                        "extra_json": json.dumps({
-                            "type": "coronal_mass_ejection",
-                            "severity": "High",
-                            "event_id": "E063"
-                        })
-                    })
-            
-            # Emit one radiation storm per month (S4+)
-            key_radiation = f"noaa-radiation-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_radiation):
-                if now.day == 8:  # 8th of each month
-                    await self.emit({
-                        "text": "NOAA: Radiation storm (S4 Severe or S5 Extreme)",
-                        "event_type": "radiation_storm",
-                        "severity": "S4-S5",
-                        "event_id_expected": "E064",
-                        "extra_json": json.dumps({
-                            "type": "radiation_storm",
-                            "severity": "S4-S5",
-                            "event_id": "E064"
-                        })
-                    })
-            
-            # Emit one solar wind shock per 2 weeks
-            key_shock = f"noaa-shock-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_shock):
-                if now.day % 14 == 7:  # Every 2 weeks, offset from flares
-                    await self.emit({
-                        "text": "NOAA: Solar wind shock / interplanetary shock detected",
-                        "event_type": "solar_wind_shock",
-                        "severity": "High",
-                        "event_id_expected": "E065",
-                        "extra_json": json.dumps({
-                            "type": "solar_wind_shock",
-                            "severity": "High",
-                            "event_id": "E065"
-                        })
-                    })
-        
+
         except Exception as e:
-            log.warning("[NOAA Space Weather] poll error: %s", e)
-
-
-# ═══════════════════════════════════════════════════════
-# GDELT SOURCE
-# Real-time: Geopolitical events, conflict escalation, crises
-# https://www.gdeltproject.org/
-# Classifier: keyword path → E066–E070 (conflict, protest, crisis, terror, diplomacy)
-# ═══════════════════════════════════════════════════════
-
-class GdeltSource(BaseSource):
-    """
-    Monitors GDELT (Global Database of Events, Language, and Tone) for geopolitical events.
-    Tracks: conflict escalation, protest/unrest, political crises, terrorism, diplomatic crises.
-    
-    Impact: Geopolitical tensions affect commodity and currency markets:
-      - Conflict escalation: Oil prices up, aviation down, defense stocks up
-      - Protest/unrest: Currency volatility, capital flight, political uncertainty
-      - Political crises: Forced leadership change, sudden policy shifts
-      - Terrorism alerts: Aviation/transport disruption, insurance cost spikes
-      - Diplomatic crises: Trade war signals, tariff changes, sanctions
-    
-    Strategy: Poll GDELT database for event escalation by tone and country.
-    Focus on oil-producing regions, G20 countries, and geopolitical hotspots.
-    
-    Events:
-      - E066: Conflict escalation (military buildup, armed clashes, war risk)
-      - E067: Protest/unrest (mass demonstrations, civil unrest, instability)
-      - E068: Political crisis (government collapse, forced resignation, coup)
-      - E069: Terrorism alert (terrorist attack, threat, counterterrorism ops)
-      - E070: Diplomatic crisis (sanctions, trade war, diplomatic breakdown)
-    
-    FREE API. No API key required — uses public GDELT data.
-    """
-    name = "GDELT"
-    interval_seconds = 2400.0  # Check every 40 minutes
-    
-    GDELT_API_URL = "https://api.gdeltproject.org/api/v2/search/tv"
-    GDELT_CSV_URL = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
-    
-    # Geopolitical hotspots and oil-producing regions
-    MONITORED_REGIONS = [
-        "Middle East", "North Africa", "Ukraine", "Taiwan", "South China Sea",
-        "Venezuela", "Iran", "Russia", "North Korea", "Pakistan", "India"
-    ]
-    
-    # G20 countries and major economies
-    MAJOR_COUNTRIES = [
-        "China", "Russia", "India", "Brazil", "Saudi Arabia", "Mexico",
-        "Indonesia", "Nigeria", "United States", "European Union"
-    ]
-    
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._last_event_check = {}
-    
-    async def poll(self) -> None:
-        """
-        Poll GDELT for geopolitical events.
-        Strategy: Emit synthetic geopolitical notifications (simulating real-time feed).
-        
-        In production: Parse GDELT events by tone/sentiment, event type, location,
-        and source credibility (Cameo event codes).
-        """
-        try:
-            now = datetime.datetime.utcnow()
-            today = now.date()
-            
-            # Emit periodic geopolitical events
-            # (In production: parse actual GDELT events)
-            
-            # Emit one conflict escalation per month
-            key_conflict = f"gdelt-conflict-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_conflict):
-                if now.day == 5:  # 5th of each month
-                    await self.emit({
-                        "text": "GDELT: Conflict escalation in oil-producing region (military buildup, clashes)",
-                        "event_type": "conflict_escalation",
-                        "region": "Middle East / N. Africa",
-                        "event_id_expected": "E066",
-                        "extra_json": json.dumps({
-                            "type": "conflict_escalation",
-                            "region": "Oil-producing",
-                            "event_id": "E066"
-                        })
-                    })
-            
-            # Emit one protest/unrest per 2 weeks
-            key_protest = f"gdelt-protest-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_protest):
-                if now.day % 14 < 1:  # Every 2 weeks
-                    await self.emit({
-                        "text": "GDELT: Mass protests / civil unrest (instability, capital flight risk)",
-                        "event_type": "protest_unrest",
-                        "severity": "High",
-                        "event_id_expected": "E067",
-                        "extra_json": json.dumps({
-                            "type": "protest_unrest",
-                            "severity": "High",
-                            "event_id": "E067"
-                        })
-                    })
-            
-            # Emit one political crisis per month
-            key_crisis = f"gdelt-crisis-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_crisis):
-                if now.day == 12:  # 12th of each month
-                    await self.emit({
-                        "text": "GDELT: Political crisis (government collapse, forced resignation, coup risk)",
-                        "event_type": "political_crisis",
-                        "severity": "Critical",
-                        "event_id_expected": "E068",
-                        "extra_json": json.dumps({
-                            "type": "political_crisis",
-                            "severity": "Critical",
-                            "event_id": "E068"
-                        })
-                    })
-            
-            # Emit one terrorism alert per month
-            key_terror = f"gdelt-terror-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_terror):
-                if now.day == 18:  # 18th of each month
-                    await self.emit({
-                        "text": "GDELT: Terrorism alert (attack, threat, counterterrorism operation)",
-                        "event_type": "terrorism_alert",
-                        "severity": "Critical",
-                        "event_id_expected": "E069",
-                        "extra_json": json.dumps({
-                            "type": "terrorism_alert",
-                            "severity": "Critical",
-                            "event_id": "E069"
-                        })
-                    })
-            
-            # Emit one diplomatic crisis per 2 weeks
-            key_diplo = f"gdelt-diplo-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_diplo):
-                if now.day % 14 == 7:  # Every 2 weeks, offset from protests
-                    await self.emit({
-                        "text": "GDELT: Diplomatic crisis (sanctions, trade war, diplomatic breakdown)",
-                        "event_type": "diplomatic_crisis",
-                        "severity": "High",
-                        "event_id_expected": "E070",
-                        "extra_json": json.dumps({
-                            "type": "diplomatic_crisis",
-                            "severity": "High",
-                            "event_id": "E070"
-                        })
-                    })
-        
-        except Exception as e:
-            log.warning("[GDELT] poll error: %s", e)
-
-
-# ═══════════════════════════════════════════════════════
-# REDDIT VELOCITY SOURCE
-# Real-time: WSB mention spikes, meme stock surge, sentiment shifts
-# https://www.reddit.com/r/wallstreetbets/
-# Classifier: keyword path → E071–E075 (WSB spike, meme surge, sentiment, IPO hype, earnings hype)
-# ═══════════════════════════════════════════════════════
-
-class RedditVelocitySource(BaseSource):
-    """
-    Monitors Reddit mention velocity in r/wallstreetbets and investing subreddits.
-    Tracks: mention spikes, meme stock surges, sentiment shifts, IPO hype, earnings hype.
-    
-    Impact: Retail trader concentration signals market-moving event risk:
-      - WSB mention spikes: Sudden retail buying interest, volatility spike risk
-      - Meme stock surges: Coordinated retail action, short squeeze risk
-      - Sentiment shifts: Shift from bullish to bearish (or vice versa) within community
-      - IPO hype: New offering getting retail attention, allocation risk
-      - Earnings hype: Retail positioning ahead of earnings, vol expansion
-    
-    Strategy: Monitor r/wallstreetbets, r/investing, r/stocks for mention velocity.
-    Track upvote/comment ratios and user activity bursts.
-    
-    Events:
-      - E071: WSB mention spike (sudden ticker mentions, +500% over baseline)
-      - E072: Meme stock surge (coordinated retail action, squeeze risk)
-      - E073: Sentiment shift (bullish→bearish or vice versa, community flip)
-      - E074: IPO hype (new offering getting retail attention)
-      - E075: Earnings hype (retail positioning ahead of earnings release)
-    
-    FREE API. No API key required — uses public Reddit API (rate limited).
-    """
-    name = "Reddit Velocity"
-    interval_seconds = 600.0  # Check every 10 minutes
-    
-    REDDIT_API_URL = "https://www.reddit.com/api/v1/"
-    WSB_URL = "https://www.reddit.com/r/wallstreetbets/"
-    
-    # Subreddits to monitor
-    MONITORED_SUBREDDITS = [
-        "wallstreetbets",
-        "investing",
-        "stocks",
-        "stockmarket",
-        "options"
-    ]
-    
-    # Meme stock universe (historically mentioned)
-    MEME_STOCKS = [
-        "GME", "AMC", "BBBY", "KOSS", "EXPR", "NOK",
-        "BB", "SNDL", "PLTR", "NIO", "LCID"
-    ]
-    
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._baseline_mentions = {}
-    
-    async def poll(self) -> None:
-        """
-        Poll Reddit subreddits for mention velocity.
-        Strategy: Emit synthetic Reddit velocity notifications (simulating real-time feed).
-        
-        In production: Use Reddit API (PRAW) to monitor subreddit activity,
-        track mention counts vs. baseline, detect sentiment via NLP.
-        """
-        try:
-            now = datetime.datetime.utcnow()
-            today = now.date()
-            
-            # Emit periodic Reddit velocity events
-            # (In production: parse actual Reddit API activity)
-            
-            # Emit one WSB mention spike per week
-            key_spike = f"reddit-wsb-spike-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_spike):
-                if now.weekday() == 1:  # Tuesdays
-                    await self.emit({
-                        "text": "Reddit: WSB mention spike detected (500%+ above baseline)",
-                        "subreddit": "wallstreetbets",
-                        "event_type": "mention_spike",
-                        "spike_magnitude": "500%+",
-                        "event_id_expected": "E071",
-                        "extra_json": json.dumps({
-                            "type": "mention_spike",
-                            "magnitude": "500%+",
-                            "event_id": "E071"
-                        })
-                    })
-            
-            # Emit one meme stock surge per 2 weeks
-            key_meme = f"reddit-meme-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_meme):
-                if now.day % 14 < 1:  # Every 2 weeks
-                    await self.emit({
-                        "text": "Reddit: Meme stock surge (coordinated retail action, squeeze risk)",
-                        "event_type": "meme_stock_surge",
-                        "tickers": "GME/AMC/BBBY",
-                        "event_id_expected": "E072",
-                        "extra_json": json.dumps({
-                            "type": "meme_stock_surge",
-                            "tickers": "GME/AMC/BBBY",
-                            "event_id": "E072"
-                        })
-                    })
-            
-            # Emit one sentiment shift per 2 weeks
-            key_sentiment = f"reddit-sentiment-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_sentiment):
-                if now.day % 14 == 7:  # Every 2 weeks, offset from meme
-                    await self.emit({
-                        "text": "Reddit: Community sentiment shift (bullish→bearish or vice versa)",
-                        "subreddit": "wallstreetbets",
-                        "event_type": "sentiment_shift",
-                        "shift": "Bullish to Bearish",
-                        "event_id_expected": "E073",
-                        "extra_json": json.dumps({
-                            "type": "sentiment_shift",
-                            "shift": "Sentiment reversal",
-                            "event_id": "E073"
-                        })
-                    })
-            
-            # Emit one IPO hype per month
-            key_ipo = f"reddit-ipo-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_ipo):
-                if now.day == 10:  # 10th of each month
-                    await self.emit({
-                        "text": "Reddit: IPO hype detected (new offering getting retail attention)",
-                        "event_type": "ipo_hype",
-                        "severity": "High",
-                        "event_id_expected": "E074",
-                        "extra_json": json.dumps({
-                            "type": "ipo_hype",
-                            "severity": "High",
-                            "event_id": "E074"
-                        })
-                    })
-            
-            # Emit one earnings hype per 2 weeks
-            key_earnings = f"reddit-earnings-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_earnings):
-                if now.day % 14 == 3:  # Every 2 weeks, offset from others
-                    await self.emit({
-                        "text": "Reddit: Earnings hype (retail positioning ahead of earnings release)",
-                        "event_type": "earnings_hype",
-                        "num_tickers": "Multiple",
-                        "event_id_expected": "E075",
-                        "extra_json": json.dumps({
-                            "type": "earnings_hype",
-                            "num_tickers": "Multiple",
-                            "event_id": "E075"
-                        })
-                    })
-        
-        except Exception as e:
-            log.warning("[Reddit Velocity] poll error: %s", e)
-
-
-# ═══════════════════════════════════════════════════════
-# AIS VESSEL TRACKING SOURCE
-# Real-time: Maritime vessel tracking, tanker dark events, rerouting
-# https://www.marinetraffic.com/
-# Classifier: keyword path → E076–E080 (dark event, rerouting, anomaly, choke point, piracy)
-# ═══════════════════════════════════════════════════════
-
-class AisVesselTrackingSource(BaseSource):
-    """
-    Monitors AIS (Automatic Identification System) vessel tracking for maritime anomalies.
-    Tracks: tanker dark events (AIS off), rerouting, supply chain disruptions.
-    
-    Impact: Maritime anomalies signal supply chain disruptions and geopolitical risk:
-      - Tanker dark events: AIS transponders off (sanctions evasion, war/piracy avoidance, stealth)
-      - Vessel rerouting: Major route changes (chokepoint blockage, storm avoidance, piracy)
-      - Maritime anomalies: Unusual vessel behavior, stationary tankers, queue formations
-      - Choke point traffic: Suez/Panama backup, Strait of Hormuz congestion
-      - Piracy/security: Suspected piracy, naval activity, security lockdowns
-    
-    Strategy: Monitor AIS feeds for major tanker routes, choke points (Suez, Panama, Hormuz).
-    Detect dark events, rerouting patterns, and queue formations.
-    
-    Events:
-      - E076: Tanker dark event (AIS off, stealth operation, sanctions evasion)
-      - E077: Vessel rerouting (major route change, chokepoint avoidance)
-      - E078: Maritime anomaly (unusual behavior, queue, stationary)
-      - E079: Choke point traffic (Suez/Panama/Hormuz backup, congestion)
-      - E080: Piracy/security alert (suspected piracy, naval ops, lockdown)
-    
-    FREE API. No API key required — uses public AIS feeds.
-    """
-    name = "AIS Vessel Tracking"
-    interval_seconds = 1800.0  # Check every 30 minutes
-    
-    AIS_API_URL = "https://www.marinetraffic.com/"
-    VESSEL_FINDER_URL = "https://www.vesselfinder.com/"
-    
-    # Major tanker routes and choke points
-    CRITICAL_ROUTES = [
-        "Suez Canal",
-        "Panama Canal",
-        "Strait of Hormuz",
-        "Malacca Strait",
-        "English Channel",
-        "Persian Gulf",
-        "Singapore Strait"
-    ]
-    
-    # Major oil shipping hubs
-    MAJOR_PORTS = [
-        "Rotterdam", "Singapore", "Shanghai", "Houston",
-        "Port Said", "Dubai", "Fujairah", "Novorossiysk"
-    ]
-    
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._last_route_check = {}
-    
-    async def poll(self) -> None:
-        """
-        Poll AIS vessel tracking for maritime anomalies.
-        Strategy: Emit synthetic AIS notifications (simulating real-time feed).
-        
-        In production: Monitor actual AIS feeds from MarineTraffic, VesselFinder,
-        or NMEA 0183/AIS data streams for vessel positions, dark events, rerouting.
-        """
-        try:
-            now = datetime.datetime.utcnow()
-            today = now.date()
-            
-            # Emit periodic AIS events
-            # (In production: parse actual AIS API/feeds)
-            
-            # Emit one tanker dark event per 2 weeks
-            key_dark = f"ais-dark-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_dark):
-                if now.day % 14 < 1:  # Every 2 weeks
-                    await self.emit({
-                        "text": "AIS: Tanker dark event detected (AIS transponder off, stealth operation)",
-                        "event_type": "tanker_dark",
-                        "vessel_type": "Oil Tanker",
-                        "event_id_expected": "E076",
-                        "extra_json": json.dumps({
-                            "type": "tanker_dark",
-                            "vessel": "Oil Tanker",
-                            "event_id": "E076"
-                        })
-                    })
-            
-            # Emit one rerouting event per week
-            key_reroute = f"ais-reroute-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_reroute):
-                if now.weekday() == 3:  # Thursdays
-                    await self.emit({
-                        "text": "AIS: Vessel rerouting detected (major route change, chokepoint avoidance)",
-                        "event_type": "vessel_rerouting",
-                        "reason": "Chokepoint Blockage",
-                        "event_id_expected": "E077",
-                        "extra_json": json.dumps({
-                            "type": "vessel_rerouting",
-                            "reason": "Chokepoint Blockage",
-                            "event_id": "E077"
-                        })
-                    })
-            
-            # Emit one maritime anomaly per 2 weeks
-            key_anomaly = f"ais-anomaly-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_anomaly):
-                if now.day % 14 == 7:  # Every 2 weeks, offset from dark
-                    await self.emit({
-                        "text": "AIS: Maritime anomaly detected (unusual vessel behavior, queue formation)",
-                        "event_type": "maritime_anomaly",
-                        "severity": "High",
-                        "event_id_expected": "E078",
-                        "extra_json": json.dumps({
-                            "type": "maritime_anomaly",
-                            "severity": "High",
-                            "event_id": "E078"
-                        })
-                    })
-            
-            # Emit one choke point traffic event per month
-            key_choke = f"ais-choke-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_choke):
-                if now.day == 12:  # 12th of each month
-                    await self.emit({
-                        "text": "AIS: Choke point traffic surge (Suez/Panama/Hormuz congestion, backup)",
-                        "event_type": "choke_point_traffic",
-                        "location": "Suez Canal / Panama Canal / Strait of Hormuz",
-                        "event_id_expected": "E079",
-                        "extra_json": json.dumps({
-                            "type": "choke_point_traffic",
-                            "location": "Suez/Panama/Hormuz",
-                            "event_id": "E079"
-                        })
-                    })
-            
-            # Emit one piracy/security alert per month
-            key_piracy = f"ais-piracy-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_piracy):
-                if now.day == 20:  # 20th of each month
-                    await self.emit({
-                        "text": "AIS: Piracy/security alert (suspected piracy, naval activity, lockdown)",
-                        "event_type": "piracy_alert",
-                        "severity": "Critical",
-                        "event_id_expected": "E080",
-                        "extra_json": json.dumps({
-                            "type": "piracy_alert",
-                            "severity": "Critical",
-                            "event_id": "E080"
-                        })
-                    })
-        
-        except Exception as e:
-            log.warning("[AIS Vessel Tracking] poll error: %s", e)
-
-
-# ═══════════════════════════════════════════════════════
-# WHALE ALERT SOURCE
-# Real-time: Large cryptocurrency wallet movements, whale transfers
-# https://whale-alert.io/
-# Classifier: keyword path → E081–E085 (BTC transfer, ETH transfer, exchange inflow, outflow, consolidation)
-# ═══════════════════════════════════════════════════════
-
-class WhaleAlertSource(BaseSource):
-    """
-    Monitors Whale Alert for large cryptocurrency wallet movements.
-    Tracks: BTC/ETH large transfers, exchange inflows/outflows, wallet consolidation.
-    
-    Impact: Large whale transfers signal institutional or major holder movements:
-      - Large BTC transfers (>100 BTC): Major position moves, potential market impact
-      - Large ETH transfers (>1000 ETH): Ethereum whale activity, smart contract interactions
-      - Exchange inflows: Potential selling pressure (whales moving to exchange)
-      - Exchange outflows: Potential buying pressure (whales hoarding)
-      - Wallet consolidation: Preparation for large move, accumulation signal
-    
-    Strategy: Monitor Whale Alert API for transactions >100 BTC or >1000 ETH.
-    Track exchange inflows/outflows and wallet patterns.
-    
-    Events:
-      - E081: Large BTC transfer (>100 BTC, whale movement)
-      - E082: Large ETH transfer (>1000 ETH, whale movement)
-      - E083: Exchange inflow (whale moving to exchange, selling pressure)
-      - E084: Exchange outflow (whale leaving exchange, hoarding signal)
-      - E085: Wallet consolidation (multiple addresses → single address, accumulation)
-    
-    FREE API for basic events. Whale Alert has paid API for real-time alerts.
-    """
-    name = "Whale Alert"
-    interval_seconds = 600.0  # Check every 10 minutes
-    
-    WHALE_ALERT_URL = "https://api.whale-alert.io/v1/transactions"
-    
-    # Threshold amounts (in crypto units)
-    BTC_THRESHOLD = 100.0  # Alert on >100 BTC transfers
-    ETH_THRESHOLD = 1000.0  # Alert on >1000 ETH transfers
-    
-    # Major exchanges
-    MAJOR_EXCHANGES = [
-        "Binance", "Coinbase", "Kraken", "FTX", "Bybit",
-        "OKX", "Huobi", "Kucoin", "Gemini", "Bitstamp"
-    ]
-    
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._last_tx_check = {}
-    
-    async def poll(self) -> None:
-        """
-        Poll Whale Alert for large cryptocurrency movements.
-        Strategy: Emit synthetic whale alert notifications (simulating real-time feed).
-        
-        In production: Use Whale Alert API with auth token to monitor
-        real-time large transactions filtered by asset and amount.
-        """
-        try:
-            now = datetime.datetime.utcnow()
-            today = now.date()
-            
-            # Emit periodic whale alert events
-            # (In production: parse actual Whale Alert API)
-            
-            # Emit one large BTC transfer per week
-            key_btc = f"whale-btc-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_btc):
-                if now.weekday() == 0:  # Mondays
-                    await self.emit({
-                        "text": "Whale Alert: Large BTC transfer detected (>100 BTC)",
-                        "asset": "Bitcoin",
-                        "amount_btc": 150.0,
-                        "event_id_expected": "E081",
-                        "extra_json": json.dumps({
-                            "asset": "BTC",
-                            "amount": 150.0,
-                            "event_id": "E081"
-                        })
-                    })
-            
-            # Emit one large ETH transfer per week
-            key_eth = f"whale-eth-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_eth):
-                if now.weekday() == 1:  # Tuesdays
-                    await self.emit({
-                        "text": "Whale Alert: Large ETH transfer detected (>1000 ETH)",
-                        "asset": "Ethereum",
-                        "amount_eth": 1500.0,
-                        "event_id_expected": "E082",
-                        "extra_json": json.dumps({
-                            "asset": "ETH",
-                            "amount": 1500.0,
-                            "event_id": "E082"
-                        })
-                    })
-            
-            # Emit one exchange inflow per 2 weeks
-            key_inflow = f"whale-inflow-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_inflow):
-                if now.day % 14 < 1:  # Every 2 weeks
-                    await self.emit({
-                        "text": "Whale Alert: Large exchange inflow (whale moving to exchange, selling pressure)",
-                        "event_type": "exchange_inflow",
-                        "exchange": "Major Exchange",
-                        "event_id_expected": "E083",
-                        "extra_json": json.dumps({
-                            "type": "exchange_inflow",
-                            "exchange": "Major Exchange",
-                            "event_id": "E083"
-                        })
-                    })
-            
-            # Emit one exchange outflow per 2 weeks
-            key_outflow = f"whale-outflow-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_outflow):
-                if now.day % 14 == 7:  # Every 2 weeks, offset from inflow
-                    await self.emit({
-                        "text": "Whale Alert: Large exchange outflow (whale leaving exchange, hoarding signal)",
-                        "event_type": "exchange_outflow",
-                        "exchange": "Major Exchange",
-                        "event_id_expected": "E084",
-                        "extra_json": json.dumps({
-                            "type": "exchange_outflow",
-                            "exchange": "Major Exchange",
-                            "event_id": "E084"
-                        })
-                    })
-            
-            # Emit one wallet consolidation per month
-            key_consol = f"whale-consol-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_consol):
-                if now.day == 25:  # 25th of each month
-                    await self.emit({
-                        "text": "Whale Alert: Wallet consolidation detected (multiple→single address, accumulation)",
-                        "event_type": "wallet_consolidation",
-                        "signal": "Accumulation",
-                        "event_id_expected": "E085",
-                        "extra_json": json.dumps({
-                            "type": "wallet_consolidation",
-                            "signal": "Accumulation",
-                            "event_id": "E085"
-                        })
-                    })
-        
-        except Exception as e:
-            log.warning("[Whale Alert] poll error: %s", e)
-
-
-# ═══════════════════════════════════════════════════════
-# COINGLASS SOURCE
-# Real-time: Crypto derivatives data — funding rates, liquidations, open interest
-# https://www.coinglass.com/
-# Classifier: keyword path → E086–E090 (funding rate, liquidation, OI spike, leverage, market stress)
-# ═══════════════════════════════════════════════════════
-
-class CoinglassSource(BaseSource):
-    """
-    Monitors Coinglass crypto derivatives market data.
-    Tracks: funding rates (leverage cost), liquidations (cascade risk), open interest spikes (leverage extremes).
-    
-    Impact: Crypto derivatives data signals leverage extremes and cascade risk:
-      - High funding rates: Expensive leverage = long crowding = liquidation risk
-      - Liquidation cascades: Liquidations trigger more liquidations (systemic risk)
-      - Open interest spikes: Rapid leverage increase = volatility risk
-      - Long/short ratio extremes: Extreme positioning imbalance
-      - Margin calls: Rising borrowing costs, leverage unwinding pressure
-    
-    Strategy: Monitor BTC/ETH perpetual funding rates, liquidation data, open interest.
-    Flag extremes: Funding >0.1% per 8h (extreme), liquidations >$100M daily, OI +50% in 24h.
-    
-    Events:
-      - E086: High funding rate (expensive leverage, long crowding)
-      - E087: Liquidation cascade (>$100M liquidated, cascade risk)
-      - E088: Open interest spike (+50% in 24h, leverage rush)
-      - E089: Long/short extreme (>60% on one side, imbalance)
-      - E090: Margin call spike (rising borrow costs, leverage pressure)
-    
-    FREE API. No API key required — uses public Coinglass data.
-    """
-    name = "Coinglass"
-    interval_seconds = 600.0  # Check every 10 minutes
-    
-    COINGLASS_API_URL = "https://www.coinglass.com/api/"
-    
-    # Major perpetual contracts to monitor
-    PERPS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
-    
-    # Major exchanges
-    EXCHANGES = ["Binance", "Bybit", "OKX", "Deribit", "Kraken"]
-    
-    def __init__(self, queue: asyncio.Queue):
-        super().__init__(queue)
-        self._baseline_funding = {}
-        self._baseline_oi = {}
-    
-    async def poll(self) -> None:
-        """
-        Poll Coinglass for crypto derivatives market data.
-        Strategy: Emit synthetic Coinglass notifications (simulating real-time feed).
-        
-        In production: Query Coinglass API for funding rates, liquidation data,
-        open interest, long/short ratios across major exchanges and pairs.
-        """
-        try:
-            now = datetime.datetime.utcnow()
-            today = now.date()
-            
-            # Emit periodic Coinglass events
-            # (In production: fetch actual Coinglass API data)
-            
-            # Emit one high funding rate alert per week
-            key_funding = f"coinglass-funding-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_funding):
-                if now.weekday() == 0:  # Mondays
-                    await self.emit({
-                        "text": "Coinglass: High funding rate detected (>0.1% per 8h, long crowding)",
-                        "pair": "BTC/USDT",
-                        "funding_rate": "0.15% per 8h",
-                        "event_id_expected": "E086",
-                        "extra_json": json.dumps({
-                            "pair": "BTC/USDT",
-                            "funding": "0.15%",
-                            "event_id": "E086"
-                        })
-                    })
-            
-            # Emit one liquidation cascade per 2 weeks
-            key_liquidation = f"coinglass-liquidation-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_liquidation):
-                if now.day % 14 < 1:  # Every 2 weeks
-                    await self.emit({
-                        "text": "Coinglass: Liquidation cascade detected (>$100M liquidated in 24h, cascade risk)",
-                        "total_liquidated": "$150M+",
-                        "period": "24h",
-                        "event_id_expected": "E087",
-                        "extra_json": json.dumps({
-                            "total_liquidated": "$150M+",
-                            "period": "24h",
-                            "event_id": "E087"
-                        })
-                    })
-            
-            # Emit one OI spike per week
-            key_oi = f"coinglass-oi-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_oi):
-                if now.weekday() == 2:  # Wednesdays
-                    await self.emit({
-                        "text": "Coinglass: Open interest spike detected (+50% in 24h, leverage rush)",
-                        "asset": "BTC",
-                        "oi_change": "+50%",
-                        "event_id_expected": "E088",
-                        "extra_json": json.dumps({
-                            "asset": "BTC",
-                            "oi_change": "+50%",
-                            "event_id": "E088"
-                        })
-                    })
-            
-            # Emit one long/short extreme per 2 weeks
-            key_extreme = f"coinglass-extreme-{now.isocalendar()[1]}"
-            
-            if not self._already_seen(key_extreme):
-                if now.day % 14 == 7:  # Every 2 weeks, offset from liquidation
-                    await self.emit({
-                        "text": "Coinglass: Long/short extreme (>60% on one side, positioning imbalance)",
-                        "ratio": "70% long / 30% short",
-                        "severity": "Extreme",
-                        "event_id_expected": "E089",
-                        "extra_json": json.dumps({
-                            "ratio": "70L/30S",
-                            "severity": "Extreme",
-                            "event_id": "E089"
-                        })
-                    })
-            
-            # Emit one margin call spike per month
-            key_margin = f"coinglass-margin-{now.year}-{now.month}"
-            
-            if not self._already_seen(key_margin):
-                if now.day == 15:  # 15th of each month
-                    await self.emit({
-                        "text": "Coinglass: Margin call spike (rising borrow costs, leverage pressure)",
-                        "borrow_rate_change": "+2%",
-                        "exchanges": "Binance/Bybit/OKX",
-                        "event_id_expected": "E090",
-                        "extra_json": json.dumps({
-                            "borrow_rate_change": "+2%",
-                            "exchanges": "Binance/Bybit/OKX",
-                            "event_id": "E090"
-                        })
-                    })
-        
-        except Exception as e:
-            log.warning("[Coinglass] poll error: %s", e)
+            log.warning("[NOAA Space Weather] Error: %s", e)
 
 
 # ═══════════════════════════════════════════════════════
@@ -2905,73 +1278,39 @@ import os
 def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
     """
     Instantiate all active sources. Pass config dict with API keys.
-    To disable a source temporarily, comment it out here.
-    
+
     Config keys:
       - EIA_API_KEY (required for EIA)
+      - BLS_API_KEY (optional, increases rate limit 25→500/day)
       - WHALE_ALERT_KEY (optional, free tier available)
       - COINGLASS_KEY (optional, free tier available)
-    
-    All other sources use free RSS feeds or public APIs.
+      - ETHERSCAN_API_KEY (optional)
     """
     return [
-        # ── Week 1: Government Sources ──
+        # ── Government / Macro Sources (all free, no key) ──
         EiaPetroleumSource(queue, api_key=config.get("EIA_API_KEY", "")),
         OpecRssSource(queue),
         FedRssSource(queue),
         EcbRssSource(queue),
         FederalRegisterSource(queue),
         SecPressReleaseSource(queue),
-        
-        # ── Week 2: Real-Time Exchange Data (LIVE NOW) ──
-        KrakenFundingRateSource(queue),   # replaces Binance+Bybit (geo-blocked)
+        BlsSource(queue, api_key=config.get("BLS_API_KEY", "")),
+
+        # ── Regulatory / Safety Sources (all free RSS, no key) ──
+        FdaMedwatchSource(queue),
+        SecEnforcementSource(queue),
+        NoaaSpaceWeatherSource(queue),
+
+        # ── Real-Time Exchange Data ──
+        KrakenFundingRateSource(queue),
         OkxFundingRateSource(queue),
         BlockchainComSource(queue),
-        
-        # ── Week 3: Blockchain Data (NEW) ──
+
+        # ── Blockchain Data ──
         EtherscanSource(queue, api_key=config.get("ETHERSCAN_API_KEY", "")),
         CoinGeckoSource(queue),
-        
+
         # ── Optional: Requires API Keys ──
         # WhaleAlertSource(queue, api_key=config.get("WHALE_ALERT_KEY", "")),
         # CoinglassSource(queue, api_key=config.get("COINGLASS_KEY", "")),
-        
-        # ── Week 4: Economic Data (BLS) ──
-        BlsSource(queue),
-        
-        # ── Week 5: Infrastructure Data (FAA) ──
-        FaaNotamSource(queue),
-        
-        # ── Week 6: Legal/Courts Data (PACER) ──
-        PacerSource(queue),
-        
-        # ── Week 7: Pharma/Biotech Data (FDA MedWatch) ──
-        FdaMedwatchSource(queue),
-        
-        # ── Week 8: Regulatory Enforcement (SEC) ──
-        SecEnforcementSource(queue),
-        
-        # ── Week 9: Telecom Enforcement (FCC) ──
-        FccEnforcementSource(queue),
-        
-        # ── Week 10: Space Weather (NOAA) ──
-        NoaaSpaceWeatherSource(queue),
-        
-        # ── Week 11: Geopolitical Events (GDELT) ──
-        GdeltSource(queue),
-        
-        # ── Week 12: Retail Sentiment (Reddit Velocity) ──
-        RedditVelocitySource(queue),
-        
-        # ── Week 13: Maritime Tracking (AIS) ──
-        AisVesselTrackingSource(queue),
-        
-        # ── Week 14: Crypto Whale Activity (Whale Alert) ──
-        WhaleAlertSource(queue),
-        
-        # ── Week 15: Crypto Derivatives (Coinglass) ──
-        CoinglassSource(queue),
-        
-        # ── Placeholder sources (TODO): ──
-        # EdgarSource(queue),  # Needs third-party API or bulk indexing
     ]
