@@ -1269,6 +1269,208 @@ class NoaaSpaceWeatherSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# SEC EDGAR FULL-TEXT FILINGS (REAL)
+# Endpoint: efts.sec.gov/LATEST/search-index?dateRange=custom
+# FREE, no API key. Returns recent 8-K, 10-K, 10-Q filings.
+# Classifier: keyword path → E048–E053
+# ═══════════════════════════════════════════════════════
+
+class EdgarFilingSource(BaseSource):
+    """
+    Polls SEC EDGAR full-text search for recent 8-K and 10-K filings.
+    Uses the free EFTS search endpoint — no key needed.
+    """
+    name = "EDGAR Filings"
+    interval_seconds = 120.0  # every 2 min
+
+    SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
+    FULL_TEXT_URL = "https://efts.sec.gov/LATEST/search-index"
+
+    # We use the newer EDGAR full-text search API
+    EFTS_URL = "https://efts.sec.gov/LATEST/search-index"
+
+    async def poll(self) -> None:
+        try:
+            # EDGAR full-text search for recent 8-K filings
+            params = {
+                "q": "\"8-K\"",
+                "dateRange": "custom",
+                "startdt": (datetime.datetime.utcnow() - datetime.timedelta(hours=2)).strftime("%Y-%m-%d"),
+                "enddt": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
+                "forms": "8-K",
+            }
+            headers = {
+                "User-Agent": "APEX Signal Trader research@apex.local",
+                "Accept": "application/json",
+            }
+
+            async with aiohttp.ClientSession() as session:
+                # Use the EDGAR full-text search API
+                url = "https://efts.sec.gov/LATEST/search-index"
+                async with session.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status != 200:
+                        # Fallback: use the EDGAR company search RSS
+                        await self._poll_rss(session, headers)
+                        return
+
+                    data = await resp.json()
+                    for hit in data.get("hits", {}).get("hits", [])[:15]:
+                        source = hit.get("_source", {})
+                        filing_id = hit.get("_id", "")
+
+                        if self._already_seen(filing_id):
+                            continue
+
+                        company = source.get("display_names", ["Unknown"])[0] if source.get("display_names") else "Unknown"
+                        form = source.get("form_type", "8-K")
+                        filed = source.get("file_date", "")
+                        desc = source.get("display_description", "")[:200]
+
+                        await self.emit({
+                            "text": f"EDGAR {form}: {company} — {desc}",
+                            "company": company,
+                            "form_type": form,
+                            "file_date": filed,
+                            "filing_id": filing_id,
+                            "extra_json": json.dumps({
+                                "filing_id": filing_id,
+                                "company": company,
+                                "form_type": form,
+                                "file_date": filed,
+                            }),
+                        })
+
+        except Exception as e:
+            log.warning("[EDGAR Filings] Error: %s", e)
+
+    async def _poll_rss(self, session, headers):
+        """Fallback: poll EDGAR company filings RSS for recent 8-Ks."""
+        try:
+            rss_url = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&dateb=&owner=include&count=20&search_text=&start=0&output=atom"
+            async with session.get(rss_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return
+
+                text = await resp.text()
+                # Parse Atom feed
+                import xml.etree.ElementTree as ET
+                root = ET.fromstring(text)
+                ns = {"atom": "http://www.w3.org/2005/Atom"}
+
+                for entry in root.findall("atom:entry", ns)[:15]:
+                    title_el = entry.find("atom:title", ns)
+                    link_el = entry.find("atom:link", ns)
+                    summary_el = entry.find("atom:summary", ns)
+                    uid_el = entry.find("atom:id", ns)
+
+                    uid = uid_el.text if uid_el is not None else ""
+                    if not uid or self._already_seen(uid):
+                        continue
+
+                    title = title_el.text if title_el is not None else ""
+                    summary = summary_el.text if summary_el is not None else ""
+                    link = link_el.get("href", "") if link_el is not None else ""
+
+                    await self.emit({
+                        "text": f"EDGAR 8-K: {title}",
+                        "title": title,
+                        "link": link,
+                        "extra_json": json.dumps({"uid": uid, "source": "edgar_rss"}),
+                    })
+
+        except Exception as e:
+            log.warning("[EDGAR Filings] RSS fallback error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# KRAKEN SPOT PRICE FEED (REAL)
+# Endpoint: api.kraken.com/0/public/Ticker
+# FREE, no API key. BTC + ETH spot prices every 10 seconds.
+# Gives the dashboard something live to show.
+# ═══════════════════════════════════════════════════════
+
+class KrakenPriceSource(BaseSource):
+    """
+    Polls Kraken spot prices for BTC and ETH every 10 seconds.
+    Emits price + 24h change so the dashboard has real-time data.
+    FREE. No API key required.
+    """
+    name = "Kraken Price"
+    interval_seconds = 10.0
+
+    TICKER_URL = "https://api.kraken.com/0/public/Ticker"
+    PAIRS = {
+        "XXBTZUSD": "BTC",
+        "XETHZUSD": "ETH",
+    }
+
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._last_prices = {}
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                params = {"pair": ",".join(self.PAIRS.keys())}
+                async with session.get(
+                    self.TICKER_URL,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status != 200:
+                        return
+
+                    data = await resp.json()
+                    result = data.get("result", {})
+
+                    for pair_id, label in self.PAIRS.items():
+                        ticker = result.get(pair_id)
+                        if not ticker:
+                            continue
+
+                        # c = last trade close, o = today open
+                        price = float(ticker["c"][0])
+                        open_price = float(ticker["o"])
+                        high = float(ticker["h"][1])   # 24h high
+                        low = float(ticker["l"][1])    # 24h low
+                        volume = float(ticker["v"][1]) # 24h volume
+
+                        # Only emit if price actually changed
+                        last = self._last_prices.get(label)
+                        if last and abs(price - last) < 0.01:
+                            continue
+                        self._last_prices[label] = price
+
+                        change_pct = ((price - open_price) / open_price) * 100 if open_price else 0
+                        direction = "up" if change_pct >= 0 else "down"
+
+                        await self.emit({
+                            "text": f"{label}/USD ${price:,.2f} ({change_pct:+.2f}%) H:{high:,.0f} L:{low:,.0f}",
+                            "symbol": label,
+                            "price": price,
+                            "change_pct": change_pct,
+                            "high_24h": high,
+                            "low_24h": low,
+                            "volume_24h": volume,
+                            "direction": direction,
+                            "extra_json": json.dumps({
+                                "symbol": label,
+                                "price": price,
+                                "change_pct": round(change_pct, 2),
+                                "direction": direction,
+                            }),
+                        })
+
+        except Exception as e:
+            log.warning("[Kraken Price] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -1287,7 +1489,10 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
       - ETHERSCAN_API_KEY (optional)
     """
     return [
-        # ── Government / Macro Sources (all free, no key) ──
+        # ── Live Price Data ──
+        KrakenPriceSource(queue),
+
+        # ── Government / Macro Sources ──
         EiaPetroleumSource(queue, api_key=config.get("EIA_API_KEY", "")),
         OpecRssSource(queue),
         FedRssSource(queue),
@@ -1296,7 +1501,8 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         SecPressReleaseSource(queue),
         BlsSource(queue, api_key=config.get("BLS_API_KEY", "")),
 
-        # ── Regulatory / Safety Sources (all free RSS, no key) ──
+        # ── SEC / Regulatory ──
+        EdgarFilingSource(queue),
         FdaMedwatchSource(queue),
         SecEnforcementSource(queue),
         NoaaSpaceWeatherSource(queue),

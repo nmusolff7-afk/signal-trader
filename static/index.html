@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>APEX SIGNAL TRADER - LIVE</title>
+  <title>APEX SIGNAL TRADER</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    
+
     :root {
       --bg: #0a0e12;
       --bg2: #0f141a;
@@ -23,7 +23,7 @@
       --mono: 'Courier New', monospace;
       --sans: 'Segoe UI', Tahoma, Geneva, sans-serif;
     }
-    
+
     html, body {
       background: var(--bg);
       color: var(--text);
@@ -32,68 +32,80 @@
       height: 100%;
       overflow: hidden;
     }
-    
+
     header {
       background: var(--bg2);
       border-bottom: 1px solid var(--border);
-      padding: 16px 24px;
+      padding: 12px 24px;
       display: flex;
       justify-content: space-between;
       align-items: center;
     }
-    
+
     .logo {
-      font-size: 24px;
+      font-size: 20px;
       font-weight: bold;
       letter-spacing: 2px;
       color: var(--accent);
       font-family: var(--sans);
     }
-    
     .logo span { color: var(--orange); }
-    
-    .status-indicator {
+
+    .header-right {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 20px;
       font-size: 11px;
     }
-    
+
+    .price-ticker {
+      display: flex;
+      gap: 16px;
+    }
+
+    .price-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .price-symbol { color: var(--text-dim); font-size: 10px; }
+    .price-value { color: var(--text); font-weight: bold; font-size: 13px; font-family: var(--sans); }
+    .price-value.up { color: var(--green); }
+    .price-value.down { color: var(--red); }
+
     .pulse {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
+      width: 8px; height: 8px; border-radius: 50%;
       background: var(--green);
       box-shadow: 0 0 10px var(--green);
-      animation: pulse 1.5s ease-in-out infinite;
+      animation: pulse 2s ease-in-out infinite;
     }
-    
     @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.5; transform: scale(0.8); }
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
     }
-    
+
     .container {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 280px 1fr;
       gap: 1px;
-      height: calc(100vh - 57px);
+      height: calc(100vh - 49px);
       background: var(--border);
       overflow: hidden;
     }
-    
+
     .panel {
       display: flex;
       flex-direction: column;
       background: var(--bg);
       overflow: hidden;
     }
-    
+
     .panel-header {
       background: var(--bg2);
-      padding: 12px 16px;
+      padding: 10px 14px;
       border-bottom: 1px solid var(--border);
-      font-size: 11px;
+      font-size: 10px;
       font-weight: bold;
       letter-spacing: 2px;
       color: var(--text-dim);
@@ -101,322 +113,238 @@
       justify-content: space-between;
       align-items: center;
     }
-    
+
     .panel-body {
       flex: 1;
       overflow-y: auto;
-      padding: 12px;
+      padding: 10px;
     }
-    
-    .stat-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      margin-bottom: 16px;
+
+    .stat-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 10px;
     }
-    
+
     .stat-card {
+      flex: 1;
       background: var(--bg2);
       border: 1px solid var(--border);
-      padding: 12px;
-      border-radius: 4px;
+      padding: 8px;
+      border-radius: 3px;
+      text-align: center;
     }
-    
-    .stat-label {
-      font-size: 10px;
-      color: var(--text-dim);
-      letter-spacing: 1px;
-      margin-bottom: 4px;
-    }
-    
-    .stat-value {
-      font-size: 24px;
-      font-weight: bold;
-      color: var(--accent);
-      font-family: var(--sans);
-    }
-    
+
+    .stat-label { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; }
+    .stat-value { font-size: 18px; font-weight: bold; color: var(--accent); font-family: var(--sans); margin-top: 2px; }
     .stat-value.green { color: var(--green); }
     .stat-value.orange { color: var(--orange); }
-    .stat-value.red { color: var(--red); }
-    
+
     .source-item {
       background: var(--bg2);
       border: 1px solid var(--border);
-      padding: 8px 12px;
-      margin-bottom: 6px;
+      padding: 6px 10px;
+      margin-bottom: 4px;
       border-radius: 3px;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      font-size: 11px;
     }
-    
-    .source-name {
-      flex: 1;
-      color: var(--text);
-      font-size: 12px;
-    }
-    
-    .source-count {
-      color: var(--accent);
-      font-weight: bold;
-      margin-right: 12px;
-    }
-    
-    .source-status {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
+    .source-item.inactive { opacity: 0.4; }
+
+    .source-name { flex: 1; color: var(--text); }
+    .source-count { color: var(--accent); font-weight: bold; margin-right: 8px; font-size: 10px; }
+    .source-dot {
+      width: 6px; height: 6px; border-radius: 50%;
       background: var(--green);
     }
-    
-    .source-status.waiting { background: var(--dim); }
-    .source-status.error { background: var(--red); }
-    
-    .event-list {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    
+    .source-dot.waiting { background: var(--dim); }
+
     .event-item {
       background: var(--bg2);
       border-left: 3px solid var(--border);
-      padding: 8px 12px;
+      padding: 6px 10px;
+      margin-bottom: 3px;
       border-radius: 2px;
       font-size: 11px;
-      animation: slideIn 0.3s ease;
     }
-    
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateY(-4px); }
-      to { opacity: 1; transform: translateY(0); }
+    .event-item.classified { border-left-color: var(--accent); background: rgba(0,212,255,0.04); }
+    .event-item.tradeable { border-left-color: var(--green); background: rgba(0,255,136,0.04); }
+    .event-item.price { border-left-color: var(--yellow); background: rgba(255,215,0,0.03); }
+    .event-item.new { animation: fadeIn 0.4s ease; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateX(-8px); }
+      to { opacity: 1; transform: translateX(0); }
     }
-    
-    .event-item.classified {
-      border-left-color: var(--accent);
-      background: rgba(0, 212, 255, 0.05);
-    }
-    
-    .event-item.tradeable {
-      border-left-color: var(--green);
-      background: rgba(0, 255, 136, 0.05);
-    }
-    
-    .event-time {
-      color: var(--text-dim);
-      font-size: 10px;
+
+    .event-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       margin-bottom: 2px;
     }
-    
-    .event-source {
-      color: var(--orange);
-      font-weight: bold;
-      margin-right: 8px;
-    }
-    
-    .event-id {
-      color: var(--yellow);
-      font-weight: bold;
-      margin-right: 8px;
-    }
-    
-    .event-conf {
-      color: var(--text-dim);
-      float: right;
-    }
-    
-    .event-text {
-      color: var(--text-dim);
-      font-size: 10px;
-      margin-top: 4px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    
-    ::-webkit-scrollbar {
-      width: 6px;
-    }
-    
-    ::-webkit-scrollbar-track {
-      background: var(--bg);
-    }
-    
-    ::-webkit-scrollbar-thumb {
-      background: var(--border);
-      border-radius: 3px;
-    }
-    
-    ::-webkit-scrollbar-thumb:hover {
-      background: var(--dim);
-    }
+    .event-time { color: var(--text-dim); font-size: 9px; }
+    .event-source { color: var(--orange); font-weight: bold; font-size: 10px; }
+    .event-id { color: var(--yellow); font-weight: bold; font-size: 10px; }
+    .event-conf { color: var(--text-dim); font-size: 9px; margin-left: auto; }
+    .event-text { color: var(--text-dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   </style>
 </head>
 <body>
 
 <header>
   <div class="logo">APEX <span>SIGNAL</span> TRADER</div>
-  <div class="status-indicator">
-    <div class="pulse"></div>
-    <span>PHASE 2 - WEEK 1 - LIVE</span>
+  <div class="header-right">
+    <div class="price-ticker" id="price-ticker"></div>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <div class="pulse"></div>
+      <span id="conn-label" style="color: var(--text-dim);">LIVE</span>
+    </div>
   </div>
 </header>
 
 <div class="container">
-  <!-- LEFT PANEL: Stats & Sources -->
+  <!-- LEFT: Sources -->
   <div class="panel">
-    <div class="panel-header">PHASE 2 - WEEK 1</div>
+    <div class="panel-header">
+      <span>SOURCES</span>
+      <span id="source-count" style="color: var(--accent);">0 / 0</span>
+    </div>
     <div class="panel-body">
-      <div style="background: rgba(0, 212, 255, 0.1); border: 1px solid var(--border); padding: 12px; border-radius: 4px; margin-bottom: 12px; font-size: 12px;">
-        <div style="color: var(--accent); font-weight: bold; margin-bottom: 4px;">Status: Collecting data from primary sources</div>
-        <div style="color: var(--text-dim); font-size: 11px;">✓ EIA API Key active • ✓ 95 events collected • ✓ 1 classified event</div>
-      </div>
-      
-      <div class="stat-grid">
+      <div class="stat-row">
         <div class="stat-card">
-          <div class="stat-label">Total Events</div>
+          <div class="stat-label">EVENTS</div>
           <div class="stat-value" id="total-events">0</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Classified</div>
+          <div class="stat-label">CLASSIFIED</div>
           <div class="stat-value green" id="classified-events">0</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Tradeable</div>
+          <div class="stat-label">TRADEABLE</div>
           <div class="stat-value orange" id="tradeable-events">0</div>
         </div>
-        <div class="stat-card">
-          <div class="stat-label">Trades Logged</div>
-          <div class="stat-value" id="trade-count">0</div>
-        </div>
       </div>
-      
-      <div class="panel-header" style="margin-top: 16px; margin-left: -12px; margin-right: -12px; width: auto; margin-bottom: 8px;">ACTIVE SOURCES (WEEK 1)</div>
       <div id="sources-list"></div>
-      
-      <div class="panel-header" style="margin-top: 16px; margin-left: -12px; margin-right: -12px; width: auto; margin-bottom: 8px;">PLANNED SOURCES</div>
-      <div id="planned-sources"></div>
     </div>
   </div>
-  
-  <!-- RIGHT PANEL: Live Events -->
+
+  <!-- RIGHT: Event feed -->
   <div class="panel">
-    <div class="panel-header">RAW DATA STREAM (All Events)</div>
+    <div class="panel-header">
+      <span>LIVE FEED</span>
+      <span id="feed-count" style="color: var(--text-dim);">0 events</span>
+    </div>
     <div class="panel-body">
-      <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 8px;">Last 100 raw events (all sources, unfiltered)</div>
-    <div class="event-list" id="events-list"></div>
+      <div id="events-list"></div>
     </div>
   </div>
 </div>
 
 <script>
-  const API_BASE = '/api';
-  
+  const API = '/api';
+  let lastEventHash = '';
+  let lastStatusHash = '';
+  let knownEventIds = new Set();
+
   async function updateStatus() {
     try {
-      const resp = await fetch(`${API_BASE}/status`);
+      const resp = await fetch(`${API}/status`);
       const data = await resp.json();
-      
-      // Update stats
+      const hash = JSON.stringify([data.event_count, data.tradeable_count, data.source_health?.length]);
+      if (hash === lastStatusHash) return;
+      lastStatusHash = hash;
+
       document.getElementById('total-events').textContent = data.event_count || 0;
-      document.getElementById('classified-events').textContent = (data.event_count - (data.unclassified_count || 0)) || 0;
+      const classified = (data.event_count || 0) - (data.unclassified_count || 0);
+      document.getElementById('classified-events').textContent = classified;
       document.getElementById('tradeable-events').textContent = data.tradeable_count || 0;
-      document.getElementById('trade-count').textContent = data.trade_count || 0;
-      
-      // Update active sources
-      const sourcesList = document.getElementById('sources-list');
-      
-      // All Week 1 sources (some may have data, some waiting)
-      const week1Sources = [
-        'EIA Petroleum',
-        'OPEC RSS',
-        'Fed RSS',
-        'ECB RSS',
-        'Federal Register',
-        'SEC Enforcement'
-      ];
-      
-      let activeSourcesHtml = '';
-      for (const sourceName of week1Sources) {
-        const sourceData = data.source_health.find(s => s.source === sourceName);
-        const count = sourceData ? sourceData.total : 0;
-        const hasData = count > 0;
-        
-        activeSourcesHtml += `
-          <div class="source-item" ${!hasData ? 'style="opacity: 0.6;"' : ''}>
-            <div class="source-name">${sourceName}</div>
-            <div class="source-count">${count}</div>
-            <div class="source-status ${hasData ? 'live' : 'waiting'}"></div>
-          </div>
-        `;
-      }
-      
-      sourcesList.innerHTML = activeSourcesHtml;
-      
-      // Planned sources (not yet implemented)
-      const plannedSources = [
-        { name: 'Binance Perpetuals (Funding Rates)', week: 2, events: 'E064–E067' },
-        { name: 'Bybit Perpetuals', week: 2, events: 'E064–E067' },
-        { name: 'OKX Perpetuals', week: 2, events: 'E064–E067' },
-        { name: 'Blockchain.com (Whale Transfers)', week: 3, events: 'E061–E063' },
-        { name: 'Etherscan (Token Transfers)', week: 3, events: 'E061–E063' },
-        { name: 'CoinGecko (On-Chain Metrics)', week: 3, events: 'E087–E090' },
-        { name: 'BLS Email (CPI/NFP/PCE)', week: 4, events: 'E032–E036' },
-      ];
-      
-      const plannedList = document.getElementById('planned-sources');
-      plannedList.innerHTML = plannedSources.map(s => `
-        <div class="source-item" style="opacity: 0.5;">
-          <div style="flex: 1;">
-            <div class="source-name">${s.name}</div>
-            <div style="font-size: 10px; color: var(--text-dim); margin-top: 2px;">Week ${s.week} • ${s.events}</div>
-          </div>
-          <div class="source-status waiting"></div>
-        </div>
-      `).join('');
-    } catch (e) {
-      console.error('Status fetch failed:', e);
-    }
-  }
-  
-  async function updateEvents() {
-    try {
-      const resp = await fetch(`${API_BASE}/events?limit=50`);
-      const data = await resp.json();
-      
-      const eventsList = document.getElementById('events-list');
-      if (!data.events || data.events.length === 0) {
-        eventsList.innerHTML = '<div style="color: var(--text-dim); padding: 16px; text-align: center;">Waiting for events...</div>';
-        return;
-      }
-      
-      eventsList.innerHTML = data.events.map(e => {
-        const time = new Date(e.ts).toLocaleTimeString();
-        const classified = e.event_id && e.event_id !== 'NO_EVENT';
-        const tradeable = e.tradeable;
-        const className = tradeable ? 'tradeable' : (classified ? 'classified' : '');
-        
-        return `
-          <div class="event-item ${className}">
-            <div class="event-time">${time}</div>
-            <div>
-              <span class="event-source">${e.source}</span>
-              ${classified ? `<span class="event-id">${e.event_id}</span><span class="event-conf">${(e.confidence || 0).toFixed(2)}</span>` : ''}
-            </div>
-            <div class="event-text">${e.raw_text.substring(0, 100)}...</div>
-          </div>
-        `;
+
+      const health = data.source_health || [];
+      const activeCount = health.filter(s => s.total > 0).length;
+      document.getElementById('source-count').textContent = `${activeCount} / ${health.length}`;
+
+      // Sort: active first, then alphabetical
+      health.sort((a, b) => {
+        if (a.total > 0 && b.total === 0) return -1;
+        if (a.total === 0 && b.total > 0) return 1;
+        return a.source.localeCompare(b.source);
+      });
+
+      document.getElementById('sources-list').innerHTML = health.map(s => {
+        const active = s.total > 0;
+        return `<div class="source-item ${active ? '' : 'inactive'}">
+          <div class="source-name">${s.source}</div>
+          <div class="source-count">${s.total}</div>
+          <div class="source-dot ${active ? '' : 'waiting'}"></div>
+        </div>`;
       }).join('');
     } catch (e) {
-      console.error('Events fetch failed:', e);
+      console.error('Status error:', e);
     }
   }
-  
-  // Update every 1 second
-  setInterval(updateStatus, 1000);
-  setInterval(updateEvents, 1000);
-  
+
+  async function updateEvents() {
+    try {
+      const resp = await fetch(`${API}/events?limit=80`);
+      const data = await resp.json();
+      if (!data.events || data.events.length === 0) return;
+
+      // Check if data changed
+      const hash = data.events[0]?.id + '-' + data.events.length;
+      if (hash === lastEventHash) return;
+      lastEventHash = hash;
+
+      document.getElementById('feed-count').textContent = `${data.events.length} events`;
+
+      const list = document.getElementById('events-list');
+      list.innerHTML = data.events.map(e => {
+        const time = new Date(e.ts).toLocaleTimeString();
+        const hasEvent = e.event_id && e.event_id !== 'NO_EVENT';
+        const tradeable = e.tradeable;
+        const isPrice = (e.source || '').includes('Price');
+        const isNew = !knownEventIds.has(e.id);
+        if (isNew) knownEventIds.add(e.id);
+
+        let cls = '';
+        if (tradeable) cls = 'tradeable';
+        else if (hasEvent) cls = 'classified';
+        else if (isPrice) cls = 'price';
+        if (isNew) cls += ' new';
+
+        const text = (e.raw_text || '').substring(0, 140);
+
+        return `<div class="event-item ${cls}">
+          <div class="event-meta">
+            <span class="event-time">${time}</span>
+            <span class="event-source">${e.source}</span>
+            ${hasEvent ? `<span class="event-id">${e.event_id}</span>` : ''}
+            ${hasEvent ? `<span class="event-conf">${(e.confidence || 0).toFixed(2)}</span>` : ''}
+          </div>
+          <div class="event-text">${text}</div>
+        </div>`;
+      }).join('');
+    } catch (e) {
+      console.error('Events error:', e);
+    }
+  }
+
+  // Price ticker via /api/events — look for price sources
+  function updatePriceTicker(events) {
+    // Handled by the price source emitting into the same feed
+    // The header ticker is updated from the latest price events
+  }
+
+  // Poll intervals — no flashing
+  setInterval(updateStatus, 5000);   // 5 seconds
+  setInterval(updateEvents, 3000);   // 3 seconds
+
   // Initial load
   updateStatus();
   updateEvents();

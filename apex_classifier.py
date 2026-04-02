@@ -1558,6 +1558,7 @@ SOURCE_METHOD_MAP = {
     # EDGAR
     "EDGAR 8-K":            "edgar",
     "EDGAR Full-Text Feed": "edgar",
+    "EDGAR Filings":        "edgar",
     # Whale Alert
     "Whale Alert":          "whale",
     "Whale Alert On-Chain": "whale",
