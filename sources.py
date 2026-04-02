@@ -4884,44 +4884,80 @@ class AirNowSource(BaseSource):
 # ═══════════════════════════════════════════════════════
 
 class AcledSource(BaseSource):
-    """ACLED — geolocated conflict events worldwide. Free key + email."""
+    """ACLED — geolocated conflict events worldwide. OAuth2 token auth."""
     name = "ACLED"
     interval_seconds = 3600.0  # hourly (data is weekly)
 
-    API_URL = "https://api.acleddata.com/acled/read"
+    TOKEN_URL = "https://acleddata.com/oauth/token"
+    API_URL = "https://acleddata.com/api/acled/read"
 
-    def __init__(self, queue: asyncio.Queue, api_key: str = "", email: str = ""):
+    def __init__(self, queue: asyncio.Queue, email: str = "", password: str = "", **_):
         super().__init__(queue)
-        self.api_key = api_key or os.environ.get("ACLED_API_KEY", "")
         self.email = email or os.environ.get("ACLED_EMAIL", "")
+        self.password = password or os.environ.get("ACLED_PASSWORD", "")
+        self._token = None
+        self._token_expires = 0
+
+    async def _get_token(self, session) -> str:
+        """Get OAuth2 access token (valid 24h)."""
+        import time
+        if self._token and time.time() < self._token_expires:
+            return self._token
+
+        data = {
+            "username": self.email,
+            "password": self.password,
+            "grant_type": "password",
+            "client_id": "acled",
+        }
+        async with session.post(
+            self.TOKEN_URL,
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status != 200:
+                log.warning("[ACLED] Token request failed: HTTP %s", resp.status)
+                return ""
+            result = await resp.json()
+
+        self._token = result.get("access_token", "")
+        # Token valid 24h, refresh at 23h
+        self._token_expires = time.time() + 82800
+        return self._token
 
     async def poll(self) -> None:
-        if not self.api_key or not self.email:
+        if not self.email or not self.password:
             return
 
         try:
             now = datetime.datetime.utcnow()
             week_ago = (now - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
 
-            params = {
-                "key": self.api_key,
-                "email": self.email,
-                "event_date": week_ago,
-                "event_date_where": ">=",
-                "limit": "20",
-                "fields": "event_id_cnty|event_date|event_type|country|admin1|fatalities|notes",
-            }
-
             async with aiohttp.ClientSession() as session:
-                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                token = await self._get_token(session)
+                if not token:
+                    return
+
+                headers = {"Authorization": f"Bearer {token}"}
+                params = {
+                    "event_date": week_ago,
+                    "event_date_where": ">=",
+                    "limit": "20",
+                }
+
+                async with session.get(self.API_URL, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status != 200:
+                        log.warning("[ACLED] API request failed: HTTP %s", resp.status)
                         return
                     data = await resp.json()
 
-            events = data.get("data", [])
+            events = data.get("data", data) if isinstance(data, dict) else data
             for event in (events if isinstance(events, list) else [])[:10]:
-                eid = event.get("event_id_cnty", "")
-                if not eid or self._already_seen(eid):
+                if not isinstance(event, dict):
+                    continue
+                eid = event.get("event_id_cnty", event.get("event_id", ""))
+                if not eid or self._already_seen(str(eid)):
                     continue
 
                 event_type = event.get("event_type", "")
@@ -4929,7 +4965,6 @@ class AcledSource(BaseSource):
                 region = event.get("admin1", "")
                 fatalities = event.get("fatalities", 0)
                 date = event.get("event_date", "")
-                notes = event.get("notes", "")[:120]
 
                 await self.emit({
                     "text": f"ACLED: {event_type} in {country}/{region} — {fatalities} fatalities ({date})",
@@ -5057,7 +5092,7 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         AirNowSource(queue, api_key=config.get("AIRNOW_API_KEY", "")),
 
         # -- Conflict Intelligence --
-        AcledSource(queue, api_key=config.get("ACLED_API_KEY", ""), email=config.get("ACLED_EMAIL", "")),
+        AcledSource(queue, email=config.get("ACLED_EMAIL", ""), password=config.get("ACLED_PASSWORD", "")),
 
         # -- Aircraft Tracking --
         OpenSkySource(queue, client_id=config.get("OPENSKY_CLIENT_ID", ""), client_secret=config.get("OPENSKY_CLIENT_SECRET", "")),
