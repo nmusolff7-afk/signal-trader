@@ -60,6 +60,25 @@ PHASES = [
     {"id": 9, "name": "Full Deployment + Scale",                   "priority": "LOW"},
 ]
 
+# ── All registered source names (must match .name in sources.py) ─────────────
+ALL_SOURCES = [
+    "Kraken Price", "EIA Petroleum", "OPEC RSS", "Fed RSS", "ECB RSS",
+    "Federal Register", "FedReg PrePub", "SEC Press Releases", "BLS",
+    "Treasury Auction", "CFTC COT", "FRED", "BEA", "Census EITS",
+    "White House", "Congress", "BoE", "BOJ", "SNB", "BoC",
+    "EDGAR Filings", "SEC Form 4", "FDA MedWatch", "SEC Enforcement",
+    "FERC Energy", "NRC Reactor", "OFAC Sanctions", "DOJ Antitrust", "FTC",
+    "NOAA Space Weather", "USGS Earthquake", "NWS Weather", "NHC Tropical",
+    "NASA FIRMS", "NOAA Ports", "USGS Water",
+    "FAA NAS", "CBP Border", "MISO Grid", "ERCOT", "CAISO",
+    "GDELT", "WHO Outbreak", "Wiki Pageviews",
+    "Polymarket", "FINRA ATS", "GIE AGSI", "CBOE P/C", "Eurostat", "USDA LMPR",
+    "OpenSky",
+    "Kraken Funding", "OKX Funding", "Blockchain.com",
+    "dYdX", "Mempool", "Hyperliquid", "DeFi Llama",
+    "EIA NatGas", "Etherscan", "CoinGecko",
+]
+
 # ── API keys we expect ───────────────────────────────────────────────────────
 EXPECTED_KEYS = [
     {"name": "EIA_API_KEY",         "label": "EIA Petroleum",      "required": True},
@@ -96,19 +115,23 @@ def get_status():
             tradeable_count = conn.execute("SELECT COUNT(*) FROM raw_events WHERE tradeable = 1").fetchone()[0]
             trade_count = conn.execute("SELECT COUNT(*) FROM trade_log").fetchone()[0]
 
-            # Last seen time per source
+            # Last seen time per source — from DB
             rows = conn.execute("""
                 SELECT source, MAX(ts) as last_seen, COUNT(*) as total
                 FROM raw_events GROUP BY source
-                ORDER BY COUNT(*) DESC
             """).fetchall()
-            for r in rows:
-                last = r["last_seen"]
+            db_sources = {r["source"]: {"last_seen": r["last_seen"], "total": r["total"]} for r in rows}
+
+            # Merge with ALL_SOURCES registry so every source always appears
+            for src_name in ALL_SOURCES:
+                info = db_sources.get(src_name, {})
+                total = info.get("total", 0)
+                last = info.get("last_seen", None)
                 source_health.append({
-                    "source": r["source"],
+                    "source": src_name,
                     "last_seen": last,
-                    "total": r["total"],
-                    "status": "live" if last else "never",
+                    "total": total,
+                    "status": "live" if total > 0 else "waiting",
                 })
         except Exception as e:
             print(f"Status error: {e}")

@@ -6,349 +6,208 @@
   <title>APEX SIGNAL TRADER</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-
     :root {
-      --bg: #0a0e12;
-      --bg2: #0f141a;
-      --bg3: #151d27;
-      --border: #1e2d3d;
-      --accent: #00d4ff;
-      --green: #00ff88;
-      --red: #ff3355;
-      --orange: #ff6b35;
-      --yellow: #ffd700;
-      --dim: #3a5068;
-      --text: #e8f4f8;
-      --text-dim: #6a8a9a;
-      --mono: 'Courier New', monospace;
-      --sans: 'Segoe UI', Tahoma, Geneva, sans-serif;
+      --bg: #0a0e12; --bg2: #0f141a; --bg3: #151d27;
+      --border: #1e2d3d; --accent: #00d4ff; --green: #00ff88;
+      --red: #ff3355; --orange: #ff6b35; --yellow: #ffd700;
+      --dim: #3a5068; --text: #e8f4f8; --text-dim: #6a8a9a;
+      --mono: 'Courier New', monospace; --sans: 'Segoe UI', Tahoma, sans-serif;
     }
-
-    html, body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: var(--mono);
-      font-size: 13px;
-      height: 100%;
-      overflow: hidden;
-    }
-
-    header {
-      background: var(--bg2);
-      border-bottom: 1px solid var(--border);
-      padding: 12px 24px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .logo {
-      font-size: 20px;
-      font-weight: bold;
-      letter-spacing: 2px;
-      color: var(--accent);
-      font-family: var(--sans);
-    }
+    html, body { background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 12px; height: 100%; overflow: hidden; }
+    header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 8px 16px; display: flex; justify-content: space-between; align-items: center; }
+    .logo { font-size: 18px; font-weight: bold; letter-spacing: 2px; color: var(--accent); font-family: var(--sans); }
     .logo span { color: var(--orange); }
+    .header-stats { display: flex; gap: 16px; font-size: 11px; color: var(--text-dim); }
+    .header-stats b { color: var(--accent); }
+    .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s ease-in-out infinite; display: inline-block; margin-right: 4px; }
+    @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
 
-    .header-right {
-      display: flex;
-      align-items: center;
-      gap: 20px;
-      font-size: 11px;
-    }
+    .container { display: grid; grid-template-columns: 220px 1fr 260px; gap: 1px; height: calc(100vh - 37px); background: var(--border); overflow: hidden; }
+    .panel { display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
+    .panel-header { background: var(--bg2); padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 9px; font-weight: bold; letter-spacing: 2px; color: var(--text-dim); display: flex; justify-content: space-between; align-items: center; }
+    .panel-body { flex: 1; overflow-y: auto; padding: 4px; }
 
-    .price-ticker {
-      display: flex;
-      gap: 16px;
-    }
-
-    .price-item {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .price-symbol { color: var(--text-dim); font-size: 10px; }
-    .price-value { color: var(--text); font-weight: bold; font-size: 13px; font-family: var(--sans); }
-    .price-value.up { color: var(--green); }
-    .price-value.down { color: var(--red); }
-
-    .pulse {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 10px var(--green);
-      animation: pulse 2s ease-in-out infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
-    }
-
-    .container {
-      display: grid;
-      grid-template-columns: 280px 1fr;
-      gap: 1px;
-      height: calc(100vh - 49px);
-      background: var(--border);
-      overflow: hidden;
-    }
-
-    .panel {
-      display: flex;
-      flex-direction: column;
-      background: var(--bg);
-      overflow: hidden;
-    }
-
-    .panel-header {
-      background: var(--bg2);
-      padding: 10px 14px;
-      border-bottom: 1px solid var(--border);
-      font-size: 10px;
-      font-weight: bold;
-      letter-spacing: 2px;
-      color: var(--text-dim);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .panel-body {
-      flex: 1;
-      overflow-y: auto;
-      padding: 10px;
-    }
-
-    .stat-row {
-      display: flex;
-      gap: 6px;
-      margin-bottom: 10px;
-    }
-
-    .stat-card {
-      flex: 1;
-      background: var(--bg2);
-      border: 1px solid var(--border);
-      padding: 8px;
-      border-radius: 3px;
-      text-align: center;
-    }
-
-    .stat-label { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; }
-    .stat-value { font-size: 18px; font-weight: bold; color: var(--accent); font-family: var(--sans); margin-top: 2px; }
-    .stat-value.green { color: var(--green); }
-    .stat-value.orange { color: var(--orange); }
-
-    .source-item {
-      background: var(--bg2);
-      border: 1px solid var(--border);
-      padding: 6px 10px;
-      margin-bottom: 4px;
-      border-radius: 3px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 11px;
-    }
-    .source-item.inactive { opacity: 0.4; }
-
-    .source-name { flex: 1; color: var(--text); }
-    .source-count { color: var(--accent); font-weight: bold; margin-right: 8px; font-size: 10px; }
-    .source-dot {
-      width: 6px; height: 6px; border-radius: 50%;
-      background: var(--green);
-    }
+    .source-item { background: var(--bg2); border: 1px solid var(--border); padding: 3px 6px; margin-bottom: 2px; border-radius: 2px; display: flex; justify-content: space-between; align-items: center; font-size: 10px; }
+    .source-item.inactive { opacity: 0.35; }
+    .source-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .source-count { color: var(--accent); font-weight: bold; margin-right: 4px; font-size: 9px; min-width: 20px; text-align: right; }
+    .source-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
     .source-dot.waiting { background: var(--dim); }
 
-    .event-item {
-      background: var(--bg2);
-      border-left: 3px solid var(--border);
-      padding: 6px 10px;
-      margin-bottom: 3px;
-      border-radius: 2px;
-      font-size: 11px;
-    }
-    .event-item.classified { border-left-color: var(--accent); background: rgba(0,212,255,0.04); }
-    .event-item.tradeable { border-left-color: var(--green); background: rgba(0,255,136,0.04); }
-    .event-item.price { border-left-color: var(--yellow); background: rgba(255,215,0,0.03); }
-    .event-item.new { animation: fadeIn 0.4s ease; }
+    .event-item { background: var(--bg2); border-left: 2px solid var(--border); padding: 4px 6px; margin-bottom: 2px; border-radius: 2px; font-size: 10px; }
+    .event-item.classified { border-left-color: var(--accent); background: rgba(0,212,255,0.03); }
+    .event-item.tradeable { border-left-color: var(--green); background: rgba(0,255,136,0.03); }
+    .event-item.new { animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from{opacity:0;transform:translateX(-4px);} to{opacity:1;transform:translateX(0);} }
 
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateX(-8px); }
-      to { opacity: 1; transform: translateX(0); }
-    }
+    .event-meta { display: flex; align-items: center; gap: 4px; margin-bottom: 1px; }
+    .event-time { color: var(--text-dim); font-size: 8px; }
+    .event-source { color: var(--orange); font-weight: bold; font-size: 9px; }
+    .event-id { color: var(--yellow); font-weight: bold; font-size: 9px; }
+    .event-conf { color: var(--text-dim); font-size: 8px; margin-left: auto; }
+    .event-text { color: var(--text-dim); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    .event-meta {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 2px;
-    }
-    .event-time { color: var(--text-dim); font-size: 9px; }
-    .event-source { color: var(--orange); font-weight: bold; font-size: 10px; }
-    .event-id { color: var(--yellow); font-weight: bold; font-size: 10px; }
-    .event-conf { color: var(--text-dim); font-size: 9px; margin-left: auto; }
-    .event-text { color: var(--text-dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Price ticker column */
+    .price-row { background: var(--bg2); border: 1px solid var(--border); padding: 6px 8px; margin-bottom: 2px; border-radius: 2px; display: flex; justify-content: space-between; align-items: center; }
+    .price-symbol { font-size: 11px; font-weight: bold; color: var(--text); }
+    .price-value { font-size: 13px; font-weight: bold; font-family: var(--sans); }
+    .price-value.up { color: var(--green); }
+    .price-value.down { color: var(--red); }
+    .price-change { font-size: 10px; }
+    .price-change.up { color: var(--green); }
+    .price-change.down { color: var(--red); }
+    .price-detail { font-size: 8px; color: var(--text-dim); margin-top: 2px; }
 
-    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-track { background: var(--bg); }
-    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
   </style>
 </head>
 <body>
 
 <header>
   <div class="logo">APEX <span>SIGNAL</span> TRADER</div>
-  <div class="header-right">
-    <div class="price-ticker" id="price-ticker"></div>
-    <div style="display:flex; align-items:center; gap:6px;">
-      <div class="pulse"></div>
-      <span id="conn-label" style="color: var(--text-dim);">LIVE</span>
-    </div>
+  <div class="header-stats">
+    <span><span class="pulse"></span> LIVE</span>
+    <span>Events: <b id="h-events">0</b></span>
+    <span>Classified: <b id="h-classified">0</b></span>
+    <span>Tradeable: <b id="h-tradeable">0</b></span>
+    <span>Sources: <b id="h-sources">0</b></span>
   </div>
 </header>
 
 <div class="container">
   <!-- LEFT: Sources -->
   <div class="panel">
-    <div class="panel-header">
-      <span>SOURCES</span>
-      <span id="source-count" style="color: var(--accent);">0 / 0</span>
-    </div>
-    <div class="panel-body">
-      <div class="stat-row">
-        <div class="stat-card">
-          <div class="stat-label">EVENTS</div>
-          <div class="stat-value" id="total-events">0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">CLASSIFIED</div>
-          <div class="stat-value green" id="classified-events">0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">TRADEABLE</div>
-          <div class="stat-value orange" id="tradeable-events">0</div>
-        </div>
-      </div>
-      <div id="sources-list"></div>
-    </div>
+    <div class="panel-header"><span>SOURCES</span><span id="src-active" style="color:var(--accent)">0/0</span></div>
+    <div class="panel-body" id="sources-list"></div>
   </div>
 
-  <!-- RIGHT: Event feed -->
+  <!-- CENTER: Event feed (no price events) -->
   <div class="panel">
-    <div class="panel-header">
-      <span>LIVE FEED</span>
-      <span id="feed-count" style="color: var(--text-dim);">0 events</span>
-    </div>
-    <div class="panel-body">
-      <div id="events-list"></div>
-    </div>
+    <div class="panel-header"><span>SIGNAL FEED</span><span id="feed-count" style="color:var(--text-dim)">0</span></div>
+    <div class="panel-body" id="events-list"></div>
+  </div>
+
+  <!-- RIGHT: Price ticker -->
+  <div class="panel">
+    <div class="panel-header"><span>LIVE PRICES</span><span id="price-count" style="color:var(--text-dim)">0</span></div>
+    <div class="panel-body" id="price-list"></div>
   </div>
 </div>
 
 <script>
-  const API = '/api';
-  let lastEventHash = '';
-  let lastStatusHash = '';
-  let knownEventIds = new Set();
+const API = '/api';
+let lastEventHash = '';
+let lastStatusHash = '';
+let knownIds = new Set();
 
-  async function updateStatus() {
-    try {
-      const resp = await fetch(`${API}/status`);
-      const data = await resp.json();
-      const hash = JSON.stringify([data.event_count, data.tradeable_count, data.source_health?.length]);
-      if (hash === lastStatusHash) return;
-      lastStatusHash = hash;
+async function updateStatus() {
+  try {
+    const r = await fetch(`${API}/status`);
+    const d = await r.json();
+    const h = JSON.stringify([d.event_count, d.tradeable_count, d.source_health?.length]);
+    if (h === lastStatusHash) return;
+    lastStatusHash = h;
 
-      document.getElementById('total-events').textContent = data.event_count || 0;
-      const classified = (data.event_count || 0) - (data.unclassified_count || 0);
-      document.getElementById('classified-events').textContent = classified;
-      document.getElementById('tradeable-events').textContent = data.tradeable_count || 0;
+    document.getElementById('h-events').textContent = d.event_count || 0;
+    const cls = (d.event_count||0) - (d.unclassified_count||0);
+    document.getElementById('h-classified').textContent = cls;
+    document.getElementById('h-tradeable').textContent = d.tradeable_count || 0;
 
-      const health = data.source_health || [];
-      const activeCount = health.filter(s => s.total > 0).length;
-      document.getElementById('source-count').textContent = `${activeCount} / ${health.length}`;
+    const health = d.source_health || [];
+    const active = health.filter(s => s.total > 0).length;
+    document.getElementById('h-sources').textContent = `${active}/${health.length}`;
+    document.getElementById('src-active').textContent = `${active}/${health.length}`;
 
-      // Sort: active first, then alphabetical
-      health.sort((a, b) => {
-        if (a.total > 0 && b.total === 0) return -1;
-        if (a.total === 0 && b.total > 0) return 1;
-        return a.source.localeCompare(b.source);
-      });
+    // Sort: active first by count desc, then inactive alphabetical
+    health.sort((a,b) => {
+      if (a.total > 0 && b.total === 0) return -1;
+      if (a.total === 0 && b.total > 0) return 1;
+      if (a.total > 0 && b.total > 0) return b.total - a.total;
+      return a.source.localeCompare(b.source);
+    });
 
-      document.getElementById('sources-list').innerHTML = health.map(s => {
-        const active = s.total > 0;
-        return `<div class="source-item ${active ? '' : 'inactive'}">
-          <div class="source-name">${s.source}</div>
-          <div class="source-count">${s.total}</div>
-          <div class="source-dot ${active ? '' : 'waiting'}"></div>
-        </div>`;
-      }).join('');
-    } catch (e) {
-      console.error('Status error:', e);
+    document.getElementById('sources-list').innerHTML = health.map(s => {
+      const on = s.total > 0;
+      return `<div class="source-item ${on?'':'inactive'}"><div class="source-name">${s.source}</div><div class="source-count">${s.total}</div><div class="source-dot ${on?'':'waiting'}"></div></div>`;
+    }).join('');
+  } catch(e) { console.error('Status:', e); }
+}
+
+async function updateEvents() {
+  try {
+    const r = await fetch(`${API}/events?limit=250`);
+    const d = await r.json();
+    if (!d.events || !d.events.length) return;
+
+    const h = d.events[0]?.id + '-' + d.events.length;
+    if (h === lastEventHash) return;
+    lastEventHash = h;
+
+    // Split: price events vs signal events
+    const prices = [];
+    const signals = [];
+    for (const e of d.events) {
+      if (e.source === 'Kraken Price') {
+        prices.push(e);
+      } else {
+        signals.push(e);
+      }
     }
-  }
 
-  async function updateEvents() {
-    try {
-      const resp = await fetch(`${API}/events?limit=80`);
-      const data = await resp.json();
-      if (!data.events || data.events.length === 0) return;
+    document.getElementById('feed-count').textContent = `${signals.length} signals`;
 
-      // Check if data changed
-      const hash = data.events[0]?.id + '-' + data.events.length;
-      if (hash === lastEventHash) return;
-      lastEventHash = hash;
+    // Render signal feed
+    document.getElementById('events-list').innerHTML = signals.map(e => {
+      const time = new Date(e.ts).toLocaleTimeString();
+      const hasEv = e.event_id && e.event_id !== 'NO_EVENT';
+      const trd = e.tradeable;
+      const isNew = !knownIds.has(e.id);
+      if (isNew) knownIds.add(e.id);
+      let cls = trd ? 'tradeable' : (hasEv ? 'classified' : '');
+      if (isNew) cls += ' new';
+      const txt = (e.raw_text||'').substring(0,160);
+      return `<div class="event-item ${cls}"><div class="event-meta"><span class="event-time">${time}</span><span class="event-source">${e.source}</span>${hasEv?`<span class="event-id">${e.event_id}</span><span class="event-conf">${(e.confidence||0).toFixed(2)}</span>`:''}</div><div class="event-text">${txt}</div></div>`;
+    }).join('');
 
-      document.getElementById('feed-count').textContent = `${data.events.length} events`;
-
-      const list = document.getElementById('events-list');
-      list.innerHTML = data.events.map(e => {
-        const time = new Date(e.ts).toLocaleTimeString();
-        const hasEvent = e.event_id && e.event_id !== 'NO_EVENT';
-        const tradeable = e.tradeable;
-        const isPrice = (e.source || '').includes('Price');
-        const isNew = !knownEventIds.has(e.id);
-        if (isNew) knownEventIds.add(e.id);
-
-        let cls = '';
-        if (tradeable) cls = 'tradeable';
-        else if (hasEvent) cls = 'classified';
-        else if (isPrice) cls = 'price';
-        if (isNew) cls += ' new';
-
-        const text = (e.raw_text || '').substring(0, 140);
-
-        return `<div class="event-item ${cls}">
-          <div class="event-meta">
-            <span class="event-time">${time}</span>
-            <span class="event-source">${e.source}</span>
-            ${hasEvent ? `<span class="event-id">${e.event_id}</span>` : ''}
-            ${hasEvent ? `<span class="event-conf">${(e.confidence || 0).toFixed(2)}</span>` : ''}
-          </div>
-          <div class="event-text">${text}</div>
-        </div>`;
-      }).join('');
-    } catch (e) {
-      console.error('Events error:', e);
+    // Render price column — deduplicate to latest per symbol
+    const latestPrices = {};
+    for (const p of prices) {
+      const txt = p.raw_text || '';
+      const match = txt.match(/^(\w+\/USD)\s+\$([\d,.]+)\s+\(([^)]+)\)\s+H:([\d,.]+)\s+L:([\d,.]+)/);
+      if (match) {
+        const [, sym, price, change, hi, lo] = match;
+        if (!latestPrices[sym]) {
+          latestPrices[sym] = { sym, price, change, hi, lo, time: new Date(p.ts).toLocaleTimeString() };
+        }
+      }
     }
-  }
 
-  // Price ticker via /api/events — look for price sources
-  function updatePriceTicker(events) {
-    // Handled by the price source emitting into the same feed
-    // The header ticker is updated from the latest price events
-  }
+    const priceArr = Object.values(latestPrices);
+    document.getElementById('price-count').textContent = `${prices.length} ticks`;
 
-  // Poll intervals — no flashing
-  setInterval(updateStatus, 5000);   // 5 seconds
-  setInterval(updateEvents, 3000);   // 3 seconds
+    // Also show all price events as a scrollable ticker
+    document.getElementById('price-list').innerHTML =
+      priceArr.map(p => {
+        const up = !p.change.startsWith('-');
+        return `<div class="price-row"><div><div class="price-symbol">${p.sym}</div><div class="price-detail">H:${p.hi} L:${p.lo} @ ${p.time}</div></div><div style="text-align:right"><div class="price-value ${up?'up':'down'}">$${p.price}</div><div class="price-change ${up?'up':'down'}">${p.change}</div></div></div>`;
+      }).join('') +
+      '<div style="margin-top:8px;font-size:9px;color:var(--text-dim);padding:4px">RECENT TICKS</div>' +
+      prices.slice(0,40).map(p => {
+        const time = new Date(p.ts).toLocaleTimeString();
+        const txt = (p.raw_text||'').replace(/^[A-Z]+\/USD\s+/, '');
+        const up = !txt.includes('-');
+        return `<div class="event-item" style="border-left-color:${up?'var(--green)':'var(--red)'}"><div class="event-meta"><span class="event-time">${time}</span></div><div class="event-text">${p.raw_text||''}</div></div>`;
+      }).join('');
 
-  // Initial load
-  updateStatus();
-  updateEvents();
+  } catch(e) { console.error('Events:', e); }
+}
+
+setInterval(updateStatus, 5000);
+setInterval(updateEvents, 3000);
+updateStatus();
+updateEvents();
 </script>
-
 </body>
 </html>
