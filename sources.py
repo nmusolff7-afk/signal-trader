@@ -4086,6 +4086,148 @@ class UsdaLmprSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# BEA DATA API — GDP, PCE, personal income at source
+# Free key. Faster than FRED on release mornings.
+# ═══════════════════════════════════════════════════════
+
+class BeaSource(BaseSource):
+    """BEA — GDP, PCE Price Index, personal income. Free key."""
+    name = "BEA"
+    interval_seconds = 1800.0
+
+    API_URL = "https://apps.bea.gov/api/data"
+
+    DATASETS = [
+        {"DatasetName": "NIPA", "TableName": "T10101", "Frequency": "Q", "label": "GDP"},
+        {"DatasetName": "NIPA", "TableName": "T20804", "Frequency": "M", "label": "PCE Price Index"},
+    ]
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("BEA_API_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                for ds in self.DATASETS:
+                    params = {
+                        "UserID": self.api_key,
+                        "method": "GetData",
+                        "DatasetName": ds["DatasetName"],
+                        "TableName": ds["TableName"],
+                        "Frequency": ds["Frequency"],
+                        "Year": "LAST5",
+                        "ResultFormat": "JSON",
+                    }
+                    try:
+                        async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    results = data.get("BEAAPI", {}).get("Results", {})
+                    rows = results.get("Data", [])
+                    if not rows:
+                        continue
+
+                    # Get latest data point (last row with a real value)
+                    for row in reversed(rows):
+                        value = row.get("DataValue", "")
+                        if not value or value == "---":
+                            continue
+                        period = row.get("TimePeriod", "")
+                        line_desc = row.get("LineDescription", "")
+
+                        key = f"bea-{ds['label']}-{period}-{value}"
+                        if self._already_seen(key):
+                            break
+
+                        await self.emit({
+                            "text": f"BEA {ds['label']}: {line_desc} = {value} ({period})",
+                            "dataset": ds["label"],
+                            "value": value,
+                            "period": period,
+                            "line": line_desc,
+                            "extra_json": json.dumps({"dataset": ds["label"], "value": value, "period": period}),
+                        })
+                        break
+        except Exception as e:
+            log.warning("[BEA] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# CENSUS EITS API — housing, retail, durable goods, trade
+# Free key. Primary source for tier-1 economic releases.
+# ═══════════════════════════════════════════════════════
+
+class CensusEitsSource(BaseSource):
+    """Census EITS — housing starts, retail sales, durable goods. Free key."""
+    name = "Census EITS"
+    interval_seconds = 1800.0
+
+    ENDPOINTS = {
+        "resconst": {"url": "https://api.census.gov/data/timeseries/eits/resconst", "label": "Housing Starts"},
+        "marts": {"url": "https://api.census.gov/data/timeseries/eits/marts", "label": "Retail Sales"},
+        "advm3": {"url": "https://api.census.gov/data/timeseries/eits/advm3", "label": "Durable Goods"},
+    }
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("CENSUS_API_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                for name, info in self.ENDPOINTS.items():
+                    params = {
+                        "get": "cell_value,time_slot_name,category_code",
+                        "key": self.api_key,
+                        "time": "from+2025",
+                    }
+                    try:
+                        async with session.get(info["url"], params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    if not isinstance(data, list) or len(data) < 2:
+                        continue
+
+                    headers = data[0]
+                    for row in data[-3:]:  # last 3 records
+                        record = dict(zip(headers, row))
+                        value = record.get("cell_value", "")
+                        period = record.get("time_slot_name", record.get("time", ""))
+                        category = record.get("category_code", "")
+
+                        if not value or value == "N/A":
+                            continue
+
+                        key = f"census-{name}-{period}-{category}-{value}"
+                        if self._already_seen(key):
+                            continue
+
+                        await self.emit({
+                            "text": f"Census {info['label']}: {category} = {value} ({period})",
+                            "dataset": info["label"],
+                            "value": value,
+                            "period": period,
+                            "category": category,
+                            "extra_json": json.dumps({"dataset": name, "value": value, "period": period}),
+                        })
+        except Exception as e:
+            log.warning("[Census EITS] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -4110,6 +4252,8 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         TreasuryAuctionSource(queue),
         CftcCotSource(queue),
         FredSource(queue, api_key=config.get("FRED_API_KEY", "")),
+        BeaSource(queue, api_key=config.get("BEA_API_KEY", "")),
+        CensusEitsSource(queue, api_key=config.get("CENSUS_API_KEY", "")),
         WhiteHouseSource(queue),
         CongressSource(queue, api_key=config.get("CONGRESS_API_KEY", "")),
 

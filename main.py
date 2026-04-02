@@ -206,6 +206,8 @@ async def main() -> None:
         "NASA_FIRMS_KEY": os.environ.get("NASA_FIRMS_KEY", ""),
         "GIE_API_KEY": os.environ.get("GIE_API_KEY", ""),
         "ERCOT_API_KEY": os.environ.get("ERCOT_API_KEY", ""),
+        "BEA_API_KEY": os.environ.get("BEA_API_KEY", ""),
+        "CENSUS_API_KEY": os.environ.get("CENSUS_API_KEY", ""),
         "OPENSKY_CLIENT_ID": os.environ.get("OPENSKY_CLIENT_ID", ""),
         "OPENSKY_CLIENT_SECRET": os.environ.get("OPENSKY_CLIENT_SECRET", ""),
         "ETHERSCAN_API_KEY": os.environ.get("ETHERSCAN_API_KEY", ""),

@@ -1657,6 +1657,8 @@ SOURCE_METHOD_MAP = {
     "USGS Water":           "noaa",
     "USDA LMPR":            "eia",
     "FINRA ATS":            "edgar",
+    "BEA":                  "bls",
+    "Census EITS":          "bls",
 }
 
 # Sources where keyword will often fail — send to transformer
