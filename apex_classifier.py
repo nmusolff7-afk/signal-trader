@@ -1604,6 +1604,8 @@ SOURCE_METHOD_MAP = {
     # Exchange funding rates → coinglass classifier (handles E065/E066/E067)
     "Kraken Funding":       "coinglass",   # replaces Binance+Bybit (geo-blocked on Railway)
     "OKX Funding":          "coinglass",
+    # Live prices — pass through as onchain (price monitoring)
+    "Kraken Price":         "onchain",
 }
 
 # Sources where keyword will often fail — send to transformer
