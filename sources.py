@@ -3250,6 +3250,841 @@ class ErcotSource(BaseSource):
             log.warning("[ERCOT] Error: %s", e)
 
 
+
+
+# ═══════════════════════════════════════════════════════
+# OFAC SANCTIONS LIST (Treasury)
+# No auth. XML diff every 5 min for new designations.
+# ═══════════════════════════════════════════════════════
+
+class OfacSanctionsSource(BaseSource):
+    """OFAC SDN list — sanctions as trading signal. No auth."""
+    name = "OFAC Sanctions"
+    interval_seconds = 300.0
+
+    SDN_URL = "https://www.treasury.gov/ofac/downloads/sdn.csv"
+
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._last_line_count = 0
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.SDN_URL, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        return
+                    text = await resp.text()
+
+            lines = text.strip().split("\n")
+            count = len(lines)
+
+            if self._last_line_count > 0 and count != self._last_line_count:
+                delta = count - self._last_line_count
+                # New entries added
+                if delta > 0:
+                    for line in lines[-min(delta, 5):]:
+                        fields = line.split(",")
+                        if len(fields) < 3:
+                            continue
+                        entity = fields[1].strip('"') if len(fields) > 1 else ""
+                        sdn_type = fields[2].strip('"') if len(fields) > 2 else ""
+                        key = f"ofac-{entity[:50]}"
+                        if self._already_seen(key):
+                            continue
+                        await self.emit({
+                            "text": f"OFAC: NEW SANCTION — {entity} ({sdn_type}) [+{delta} entries]",
+                            "entity": entity,
+                            "sdn_type": sdn_type,
+                            "delta": delta,
+                            "extra_json": json.dumps({"entity": entity, "type": sdn_type, "delta": delta}),
+                        })
+            elif self._last_line_count == 0:
+                key = f"ofac-baseline-{count}"
+                if not self._already_seen(key):
+                    await self.emit({
+                        "text": f"OFAC: SDN baseline loaded — {count} entries",
+                        "total_entries": count,
+                        "extra_json": json.dumps({"total": count}),
+                    })
+
+            self._last_line_count = count
+        except Exception as e:
+            log.warning("[OFAC Sanctions] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# CAISO GRID (California ISO)
+# No auth. 5-min LMPs for SP15/NP15 nodes.
+# ═══════════════════════════════════════════════════════
+
+class CaisoSource(BaseSource):
+    """CAISO California grid — 5-min LMPs as nat gas demand proxy. No auth."""
+    name = "CAISO"
+    interval_seconds = 300.0
+
+    # Use the simpler today's outlook endpoint
+    OUTLOOK_URL = "http://www.caiso.com/outlook/SP/fuelsource.csv"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.OUTLOOK_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    text = await resp.text()
+
+            lines = text.strip().split("\n")
+            if len(lines) < 2:
+                return
+
+            headers = [h.strip() for h in lines[0].split(",")]
+            # Get latest row
+            latest = lines[-1].split(",")
+            if len(latest) < len(headers):
+                return
+
+            row = dict(zip(headers, latest))
+            time_val = row.get("Time", row.get("time", ""))
+
+            key = f"caiso-{time_val}"
+            if self._already_seen(key):
+                return
+
+            # Extract key generation sources
+            natural_gas = row.get("Natural Gas", row.get("natural_gas", "0"))
+            solar = row.get("Solar", row.get("solar", "0"))
+            wind = row.get("Wind", row.get("wind", "0"))
+            imports = row.get("Imports", row.get("imports", "0"))
+
+            await self.emit({
+                "text": f"CAISO: Gas={natural_gas}MW Solar={solar}MW Wind={wind}MW Imports={imports}MW ({time_val})",
+                "natural_gas_mw": natural_gas,
+                "solar_mw": solar,
+                "wind_mw": wind,
+                "extra_json": json.dumps(row),
+            })
+        except Exception as e:
+            log.warning("[CAISO] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# EIA NATURAL GAS STORAGE (extends existing EIA key)
+# Weekly Thursday 10:30 AM ET. High market impact.
+# ═══════════════════════════════════════════════════════
+
+class EiaNatGasSource(BaseSource):
+    """EIA weekly natural gas storage report. Uses existing EIA key."""
+    name = "EIA NatGas"
+    interval_seconds = 1800.0
+
+    API_URL = "https://api.eia.gov/v2/natural-gas/stor/wkly/data/"
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("EIA_API_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+        try:
+            params = {"api_key": self.api_key, "data[]": "value", "sort[0][column]": "period", "sort[0][direction]": "desc", "length": "5"}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            for record in data.get("response", {}).get("data", [])[:3]:
+                period = record.get("period", "")
+                value = record.get("value", "")
+                process = record.get("process-name", record.get("process", ""))
+                area = record.get("area-name", record.get("area", ""))
+
+                key = f"eia-ng-{period}-{area}-{value}"
+                if self._already_seen(key):
+                    continue
+
+                await self.emit({
+                    "text": f"EIA NatGas: {area} storage {value} Bcf ({process}) — {period}",
+                    "value_bcf": value,
+                    "period": period,
+                    "area": area,
+                    "extra_json": json.dumps(record),
+                })
+        except Exception as e:
+            log.warning("[EIA NatGas] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# BANK OF JAPAN RSS (launched Feb 2026)
+# No auth. Rate decisions, yield curve control.
+# ═══════════════════════════════════════════════════════
+
+class BojSource(BaseSource):
+    """Bank of Japan — monetary policy RSS. No auth."""
+    name = "BOJ"
+    interval_seconds = 600.0
+
+    RSS_URL = "https://www.boj.or.jp/en/rss/whatsnew.xml"
+
+    async def poll(self) -> None:
+        try:
+            loop = asyncio.get_event_loop()
+            feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
+            for entry in feed.entries[:10]:
+                uid = entry.get("id") or entry.get("link", "")
+                if self._already_seen(uid):
+                    continue
+                title = entry.get("title", "")
+                await self.emit({
+                    "text": f"BOJ: {title}",
+                    "title": title,
+                    "link": entry.get("link", ""),
+                    "extra_json": json.dumps({"uid": uid}),
+                })
+        except Exception as e:
+            log.warning("[BOJ] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# DOJ ANTITRUST RSS
+# No auth. Criminal indictments, merger blocks.
+# ═══════════════════════════════════════════════════════
+
+class DojAntitrustSource(BaseSource):
+    """DOJ Antitrust Division — criminal + civil filings. No auth."""
+    name = "DOJ Antitrust"
+    interval_seconds = 600.0
+
+    FEEDS = {
+        "criminal": "https://www.justice.gov/media/1194211/dl?inline",
+        "civil": "https://www.justice.gov/media/1190096/dl?inline",
+    }
+
+    async def poll(self) -> None:
+        loop = asyncio.get_event_loop()
+        for feed_name, url in self.FEEDS.items():
+            try:
+                feed = await loop.run_in_executor(None, feedparser.parse, url)
+                for entry in feed.entries[:10]:
+                    uid = entry.get("id") or entry.get("link", "")
+                    if self._already_seen(uid):
+                        continue
+                    title = entry.get("title", "")
+                    await self.emit({
+                        "text": f"DOJ Antitrust [{feed_name}]: {title}",
+                        "title": title,
+                        "feed": feed_name,
+                        "link": entry.get("link", ""),
+                        "extra_json": json.dumps({"uid": uid, "feed": feed_name}),
+                    })
+            except Exception as e:
+                log.warning("[DOJ Antitrust] %s error: %s", feed_name, e)
+
+
+# ═══════════════════════════════════════════════════════
+# BANK OF CANADA VALET API
+# No auth. CAD/USD rate + RSS for rate decisions.
+# ═══════════════════════════════════════════════════════
+
+class BocSource(BaseSource):
+    """Bank of Canada — CAD/USD rate + policy RSS. No auth."""
+    name = "BoC"
+    interval_seconds = 600.0
+
+    RATE_URL = "https://www.bankofcanada.ca/valet/observations/FXCADUSD/json"
+    RSS_URL = "https://www.bankofcanada.ca/feed/"
+
+    async def poll(self) -> None:
+        try:
+            # CAD/USD rate
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.RATE_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        obs = data.get("observations", [])
+                        if obs:
+                            latest = obs[-1]
+                            date = latest.get("d", "")
+                            rate = latest.get("FXCADUSD", {}).get("v", "")
+                            key = f"boc-rate-{date}-{rate}"
+                            if rate and not self._already_seen(key):
+                                await self.emit({
+                                    "text": f"BoC: CAD/USD = {rate} ({date})",
+                                    "rate": rate,
+                                    "date": date,
+                                    "extra_json": json.dumps({"rate": rate, "date": date}),
+                                })
+        except Exception as e:
+            log.warning("[BoC] rate error: %s", e)
+
+        # RSS
+        try:
+            loop = asyncio.get_event_loop()
+            feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
+            for entry in feed.entries[:5]:
+                uid = entry.get("id") or entry.get("link", "")
+                if self._already_seen(uid):
+                    continue
+                title = entry.get("title", "")
+                await self.emit({
+                    "text": f"BoC: {title}",
+                    "title": title,
+                    "link": entry.get("link", ""),
+                    "extra_json": json.dumps({"uid": uid}),
+                })
+        except Exception as e:
+            log.warning("[BoC] RSS error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# CBOE PUT/CALL RATIO
+# No auth. CSV download. Contrarian sentiment indicator.
+# ═══════════════════════════════════════════════════════
+
+class CboePcRatioSource(BaseSource):
+    """CBOE equity put/call ratio — contrarian sentiment. No auth."""
+    name = "CBOE P/C"
+    interval_seconds = 3600.0
+
+    EQUITY_URL = "https://cdn.cboe.com/resources/options/volume_and_call_put_ratios/equitypc.csv"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.EQUITY_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    text = await resp.text()
+
+            lines = text.strip().split("\n")
+            if len(lines) < 2:
+                return
+
+            latest = lines[-1].split(",")
+            if len(latest) < 5:
+                return
+
+            date = latest[0].strip()
+            pc_ratio = latest[-1].strip()
+
+            key = f"cboe-pc-{date}"
+            if self._already_seen(key):
+                return
+
+            try:
+                ratio = float(pc_ratio)
+                signal = ""
+                if ratio > 1.2:
+                    signal = " [EXTREME FEAR — contrarian BUY]"
+                elif ratio < 0.6:
+                    signal = " [EXTREME COMPLACENCY — risk warning]"
+            except ValueError:
+                ratio = 0
+                signal = ""
+
+            await self.emit({
+                "text": f"CBOE: Equity P/C ratio = {pc_ratio}{signal} ({date})",
+                "pc_ratio": pc_ratio,
+                "date": date,
+                "extra_json": json.dumps({"ratio": pc_ratio, "date": date}),
+            })
+        except Exception as e:
+            log.warning("[CBOE P/C] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# DEFI LLAMA — TVL, stablecoin flows, DEX volume
+# No auth. Leading indicator for crypto capital flows.
+# ═══════════════════════════════════════════════════════
+
+class DefiLlamaSource(BaseSource):
+    """DeFi Llama — TVL + stablecoin supply + DEX volume. No auth."""
+    name = "DeFi Llama"
+    interval_seconds = 1800.0
+
+    STABLECOIN_URL = "https://stablecoins.llama.fi/stablecoins?includePrices=true"
+    TVL_URL = "https://api.llama.fi/v2/historicalChainTvl"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Stablecoin supply
+                async with session.get(self.STABLECOIN_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        stables = data.get("peggedAssets", [])
+                        for s in stables[:5]:  # top 5 stablecoins
+                            name = s.get("name", "")
+                            symbol = s.get("symbol", "")
+                            chains = s.get("chainCirculating", {})
+                            total = sum(float(v.get("current", {}).get("peggedUSD", 0) or 0) for v in chains.values())
+
+                            key = f"defi-stable-{symbol}-{int(total/1e6)}"
+                            if self._already_seen(key):
+                                continue
+
+                            await self.emit({
+                                "text": f"DeFi Llama: {name} ({symbol}) supply = ${total/1e9:.2f}B",
+                                "stablecoin": symbol,
+                                "supply_usd": total,
+                                "extra_json": json.dumps({"symbol": symbol, "supply": total}),
+                            })
+
+                # Total chain TVL
+                async with session.get(self.TVL_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data and isinstance(data, list):
+                            latest = data[-1]
+                            tvl = float(latest.get("tvl", 0))
+                            date = latest.get("date", 0)
+
+                            key = f"defi-tvl-{int(tvl/1e9)}"
+                            if not self._already_seen(key):
+                                await self.emit({
+                                    "text": f"DeFi Llama: Total DeFi TVL = ${tvl/1e9:.1f}B",
+                                    "tvl": tvl,
+                                    "extra_json": json.dumps({"tvl": tvl}),
+                                })
+        except Exception as e:
+            log.warning("[DeFi Llama] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# HYPERLIQUID DEX — largest on-chain perp exchange
+# No auth. Funding, OI, whale tracking.
+# ═══════════════════════════════════════════════════════
+
+class HyperliquidSource(BaseSource):
+    """Hyperliquid DEX — perpetual funding/OI/volume. No auth."""
+    name = "Hyperliquid"
+    interval_seconds = 60.0
+
+    API_URL = "https://api.hyperliquid.xyz/info"
+    TRACKED = {"BTC", "ETH", "SOL"}
+
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._last_funding = {}
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.API_URL, json={"type": "metaAndAssetCtxs"}, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            if not isinstance(data, list) or len(data) < 2:
+                return
+
+            meta = data[0].get("universe", [])
+            ctxs = data[1]
+
+            for i, asset in enumerate(meta):
+                name = asset.get("name", "")
+                if name not in self.TRACKED or i >= len(ctxs):
+                    continue
+
+                ctx = ctxs[i]
+                funding = float(ctx.get("funding", 0) or 0)
+                oi = float(ctx.get("openInterest", 0) or 0)
+                mark = float(ctx.get("markPx", 0) or 0)
+
+                key = f"hyper-{name}-{funding:.8f}"
+                if self._already_seen(key):
+                    continue
+
+                funding_pct = funding * 100
+                await self.emit({
+                    "text": f"Hyperliquid {name}: funding {funding_pct:+.4f}%, OI ${oi:,.0f}, mark ${mark:,.2f}",
+                    "asset": name,
+                    "funding_rate": funding,
+                    "open_interest": oi,
+                    "mark_price": mark,
+                    "extra_json": json.dumps({"asset": name, "funding": funding, "oi": oi, "mark": mark}),
+                })
+        except Exception as e:
+            log.warning("[Hyperliquid] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# SWISS NATIONAL BANK RSS
+# No auth. CHF safe-haven + FX intervention signals.
+# ═══════════════════════════════════════════════════════
+
+class SnbSource(BaseSource):
+    """Swiss National Bank — monetary policy + adhoc alerts. No auth."""
+    name = "SNB"
+    interval_seconds = 600.0
+
+    FEEDS = {
+        "monetary_policy": "https://www.snb.ch/public/en/rss/mopo",
+        "adhoc": "https://www.snb.ch/public/en/rss/adhoc",
+    }
+
+    async def poll(self) -> None:
+        loop = asyncio.get_event_loop()
+        for feed_name, url in self.FEEDS.items():
+            try:
+                feed = await loop.run_in_executor(None, feedparser.parse, url)
+                for entry in feed.entries[:10]:
+                    uid = entry.get("id") or entry.get("link", "")
+                    if self._already_seen(uid):
+                        continue
+                    title = entry.get("title", "")
+                    priority = "URGENT" if feed_name == "adhoc" else "normal"
+                    await self.emit({
+                        "text": f"SNB [{priority}]: {title}",
+                        "title": title,
+                        "priority": priority,
+                        "feed": feed_name,
+                        "extra_json": json.dumps({"uid": uid, "feed": feed_name, "priority": priority}),
+                    })
+            except Exception as e:
+                log.warning("[SNB] %s error: %s", feed_name, e)
+
+
+# ═══════════════════════════════════════════════════════
+# WIKIPEDIA PAGEVIEWS — public attention as leading indicator
+# No auth. Attention spikes predict market moves.
+# ═══════════════════════════════════════════════════════
+
+class WikiPageviewSource(BaseSource):
+    """Wikipedia pageview spikes — attention signal for breaking events. No auth."""
+    name = "Wiki Pageviews"
+    interval_seconds = 3600.0  # hourly
+
+    API_URL = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia.org/all-access/user"
+
+    WATCHLIST = ["Bitcoin", "Recession", "Bank_run", "OPEC", "Federal_Reserve",
+                 "Crude_oil", "Gold", "Inflation", "Stock_market_crash", "Tariff"]
+
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._baselines = {}
+
+    async def poll(self) -> None:
+        try:
+            now = datetime.datetime.utcnow()
+            yesterday = (now - datetime.timedelta(days=1)).strftime("%Y%m%d")
+            week_ago = (now - datetime.timedelta(days=8)).strftime("%Y%m%d")
+
+            headers = {"User-Agent": "APEX Signal Trader research@apex.local"}
+            async with aiohttp.ClientSession() as session:
+                for page in self.WATCHLIST:
+                    url = f"{self.API_URL}/{page}/daily/{week_ago}/{yesterday}"
+                    try:
+                        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    items = data.get("items", [])
+                    if len(items) < 2:
+                        continue
+
+                    # Latest day vs average of prior days
+                    latest_views = items[-1].get("views", 0)
+                    prior_avg = sum(i.get("views", 0) for i in items[:-1]) / max(len(items) - 1, 1)
+
+                    if prior_avg < 100:
+                        continue
+
+                    spike_ratio = latest_views / prior_avg if prior_avg else 0
+
+                    key = f"wiki-{page}-{yesterday}"
+                    if self._already_seen(key):
+                        continue
+
+                    if spike_ratio > 2.0:
+                        await self.emit({
+                            "text": f"Wiki: '{page.replace('_',' ')}' pageviews {spike_ratio:.1f}x above normal ({latest_views:,} vs avg {prior_avg:,.0f})",
+                            "page": page,
+                            "views": latest_views,
+                            "avg_views": prior_avg,
+                            "spike_ratio": spike_ratio,
+                            "extra_json": json.dumps({"page": page, "views": latest_views, "spike": round(spike_ratio, 1)}),
+                        })
+        except Exception as e:
+            log.warning("[Wiki Pageviews] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# FTC COMPETITION RSS
+# No auth. Merger blocks, enforcement.
+# ═══════════════════════════════════════════════════════
+
+class FtcCompetitionSource(BaseSource):
+    """FTC Competition enforcement — merger blocks, investigations. No auth."""
+    name = "FTC"
+    interval_seconds = 600.0
+
+    RSS_URL = "https://www.ftc.gov/feeds/press-release-competition.xml"
+
+    async def poll(self) -> None:
+        try:
+            loop = asyncio.get_event_loop()
+            feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
+            for entry in feed.entries[:10]:
+                uid = entry.get("id") or entry.get("link", "")
+                if self._already_seen(uid):
+                    continue
+                title = entry.get("title", "")
+                await self.emit({
+                    "text": f"FTC: {title}",
+                    "title": title,
+                    "link": entry.get("link", ""),
+                    "extra_json": json.dumps({"uid": uid}),
+                })
+        except Exception as e:
+            log.warning("[FTC] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# NOAA CO-OPS TIDES & CURRENTS — port water levels
+# No auth. 6-min resolution at major ports.
+# ═══════════════════════════════════════════════════════
+
+class NoaaCoopsSource(BaseSource):
+    """NOAA CO-OPS water levels at key ports. No auth."""
+    name = "NOAA Ports"
+    interval_seconds = 600.0
+
+    API_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+
+    STATIONS = {
+        "8770570": "Houston Ship Channel",
+        "9410660": "Port of LA",
+        "8670870": "Savannah",
+        "8518750": "New York (Battery)",
+    }
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                for station_id, name in self.STATIONS.items():
+                    params = {
+                        "date": "latest",
+                        "station": station_id,
+                        "product": "water_level",
+                        "datum": "MLLW",
+                        "units": "english",
+                        "time_zone": "gmt",
+                        "format": "json",
+                        "application": "APEX_SignalTrader",
+                    }
+                    try:
+                        async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    readings = data.get("data", [])
+                    if not readings:
+                        continue
+
+                    latest = readings[-1]
+                    level = float(latest.get("v", 0))
+                    time_str = latest.get("t", "")
+
+                    key = f"coops-{station_id}-{time_str}"
+                    if self._already_seen(key):
+                        continue
+
+                    alert = ""
+                    if level > 5.0:
+                        alert = " [FLOOD RISK]"
+                    elif level > 3.0:
+                        alert = " [ELEVATED]"
+
+                    await self.emit({
+                        "text": f"NOAA Ports: {name} water level {level:.2f} ft{alert} ({time_str})",
+                        "station": name,
+                        "water_level_ft": level,
+                        "extra_json": json.dumps({"station": name, "level": level, "time": time_str}),
+                    })
+        except Exception as e:
+            log.warning("[NOAA Ports] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# EUROSTAT SDMX — Eurozone GDP, HICP, unemployment
+# No auth. Primary source for ECB policy inputs.
+# ═══════════════════════════════════════════════════════
+
+class EurostatSource(BaseSource):
+    """Eurostat — Eurozone macro stats (HICP, GDP, unemployment). No auth."""
+    name = "Eurostat"
+    interval_seconds = 3600.0
+
+    API_URL = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data"
+
+    DATASETS = {
+        "prc_hicp_mmor": "HICP Monthly Inflation",
+        "namq_10_gdp": "GDP Quarterly",
+        "une_rt_m": "Unemployment Monthly",
+    }
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                for dataset, label in self.DATASETS.items():
+                    url = f"{self.API_URL}/{dataset}?format=JSON&lang=en&geo=EA20&sinceTimePeriod=2025M01"
+                    try:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    values = data.get("value", {})
+                    times = data.get("dimension", {}).get("time", {}).get("category", {}).get("index", {})
+
+                    if not values or not times:
+                        continue
+
+                    # Get latest value
+                    max_idx = max(int(k) for k in values.keys()) if values else -1
+                    if max_idx < 0:
+                        continue
+
+                    val = values.get(str(max_idx), "")
+                    # Find time period for this index
+                    period = ""
+                    for t, idx in times.items():
+                        if idx == max_idx:
+                            period = t
+                            break
+
+                    key = f"eurostat-{dataset}-{period}-{val}"
+                    if self._already_seen(key):
+                        continue
+
+                    await self.emit({
+                        "text": f"Eurostat: {label} = {val} ({period})",
+                        "dataset": dataset,
+                        "label": label,
+                        "value": val,
+                        "period": period,
+                        "extra_json": json.dumps({"dataset": dataset, "value": val, "period": period}),
+                    })
+        except Exception as e:
+            log.warning("[Eurostat] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# USGS WATER SERVICES — flood/drought at 15-min resolution
+# No auth. Mississippi River + Gulf Coast refinery risk.
+# ═══════════════════════════════════════════════════════
+
+class UsgsWaterSource(BaseSource):
+    """USGS streamgage data — flood/drought detection. No auth."""
+    name = "USGS Water"
+    interval_seconds = 900.0
+
+    API_URL = "https://waterservices.usgs.gov/nwis/iv/"
+
+    SITES = {
+        "07032000": "Mississippi at Memphis",
+        "07289000": "Mississippi at Vicksburg",
+        "08075000": "Brays Bayou Houston",
+    }
+
+    async def poll(self) -> None:
+        try:
+            site_ids = ",".join(self.SITES.keys())
+            params = {
+                "format": "json",
+                "sites": site_ids,
+                "parameterCd": "00065",  # gage height
+                "siteStatus": "active",
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            ts_list = data.get("value", {}).get("timeSeries", [])
+            for ts in ts_list:
+                site_code = ts.get("sourceInfo", {}).get("siteCode", [{}])[0].get("value", "")
+                site_name = self.SITES.get(site_code, site_code)
+                values = ts.get("values", [{}])[0].get("value", [])
+
+                if not values:
+                    continue
+
+                latest = values[-1]
+                gage_height = float(latest.get("value", 0))
+                time_str = latest.get("dateTime", "")
+
+                key = f"usgs-water-{site_code}-{gage_height:.1f}"
+                if self._already_seen(key):
+                    continue
+
+                alert = ""
+                if "Memphis" in site_name and gage_height < 0:
+                    alert = " [LOW WATER — barge restrictions]"
+                elif gage_height > 30:
+                    alert = " [FLOOD STAGE]"
+
+                await self.emit({
+                    "text": f"USGS Water: {site_name} gage height {gage_height:.2f} ft{alert}",
+                    "site": site_name,
+                    "gage_height_ft": gage_height,
+                    "extra_json": json.dumps({"site": site_name, "height": gage_height}),
+                })
+        except Exception as e:
+            log.warning("[USGS Water] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# USDA LIVESTOCK MANDATORY PRICE REPORTING
+# No auth. Daily cattle/hog prices — inflation leading indicator.
+# ═══════════════════════════════════════════════════════
+
+class UsdaLmprSource(BaseSource):
+    """USDA livestock prices — food inflation leading indicator. No auth."""
+    name = "USDA LMPR"
+    interval_seconds = 3600.0
+
+    API_URL = "https://mpr.datamart.ams.usda.gov/services/v1.1/reports"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                # National Daily Direct Hog Report
+                async with session.get(f"{self.API_URL}/2511", timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        results = data.get("results", []) if isinstance(data, dict) else data
+                        if isinstance(results, list):
+                            for record in results[:3]:
+                                if not isinstance(record, dict):
+                                    continue
+                                date = record.get("report_date", record.get("for_date_begin", ""))
+                                price = record.get("avg_price", record.get("wtd_avg", ""))
+                                key = f"usda-hog-{date}-{price}"
+                                if not self._already_seen(key) and price:
+                                    await self.emit({
+                                        "text": f"USDA: National hog price ${price}/cwt ({date})",
+                                        "commodity": "hog",
+                                        "price": price,
+                                        "date": date,
+                                        "extra_json": json.dumps({"commodity": "hog", "price": price}),
+                                    })
+        except Exception as e:
+            log.warning("[USDA LMPR] Error: %s", e)
+
+
 # ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
@@ -3301,15 +4136,34 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         CbpBorderSource(queue),
         MisoGridSource(queue),
         ErcotSource(queue, api_key=config.get("ERCOT_API_KEY", "")),
+        CaisoSource(queue),
+        NoaaCoopsSource(queue),
+        UsgsWaterSource(queue),
 
         # -- Global Event Detection --
         GdeltDocSource(queue),
         WhoOutbreakSource(queue),
+        OfacSanctionsSource(queue),
 
-        # -- Financial Markets --
+        # -- Financial Markets / Sentiment --
         PolymarketSource(queue),
         FinraAtsSource(queue),
         GieAgsiSource(queue, api_key=config.get("GIE_API_KEY", "")),
+        CboePcRatioSource(queue),
+        WikiPageviewSource(queue),
+        EurostatSource(queue),
+
+        # -- Central Banks --
+        BojSource(queue),
+        SnbSource(queue),
+        BocSource(queue),
+
+        # -- Legal / Regulatory --
+        DojAntitrustSource(queue),
+        FtcCompetitionSource(queue),
+
+        # -- Agriculture --
+        UsdaLmprSource(queue),
 
         # -- Aircraft Tracking --
         OpenSkySource(queue, client_id=config.get("OPENSKY_CLIENT_ID", ""), client_secret=config.get("OPENSKY_CLIENT_SECRET", "")),
@@ -3322,6 +4176,9 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         # -- Crypto / DeFi --
         DydxSource(queue),
         MempoolSource(queue),
+        HyperliquidSource(queue),
+        DefiLlamaSource(queue),
+        EiaNatGasSource(queue, api_key=config.get("EIA_API_KEY", "")),
         EtherscanSource(queue, api_key=config.get("ETHERSCAN_API_KEY", "")),
         CoinGeckoSource(queue),
 

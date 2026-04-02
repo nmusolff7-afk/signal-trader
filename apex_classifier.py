@@ -1640,6 +1640,23 @@ SOURCE_METHOD_MAP = {
     "GIE AGSI":             "eia",
     "OpenSky":              "noaa",
     "ERCOT":                "eia",
+    "CAISO":                "eia",
+    "EIA NatGas":           "eia",
+    "OFAC Sanctions":       "fed",
+    "BOJ":                  "ecb",
+    "SNB":                  "ecb",
+    "BoC":                  "ecb",
+    "DOJ Antitrust":        "sec",
+    "FTC":                  "sec",
+    "CBOE P/C":             "fed",
+    "DeFi Llama":           "onchain",
+    "Hyperliquid":          "coinglass",
+    "Wiki Pageviews":       "fed",
+    "NOAA Ports":           "noaa",
+    "Eurostat":             "ecb",
+    "USGS Water":           "noaa",
+    "USDA LMPR":            "eia",
+    "FINRA ATS":            "edgar",
 }
 
 # Sources where keyword will often fail — send to transformer
