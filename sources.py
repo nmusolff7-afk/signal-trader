@@ -3020,13 +3020,18 @@ class OpenSkySource(BaseSource):
     # Known high-interest callsigns (partial match)
     VIP_CALLSIGNS = {"SAM", "EXEC", "VENUS", "REACH", "EVAC", "IRON", "DUKE", "RCH"}
 
-    def __init__(self, queue: asyncio.Queue):
+    def __init__(self, queue: asyncio.Queue, client_id: str = "", client_secret: str = ""):
         super().__init__(queue)
         self._last_military_count = {}
+        self.client_id = client_id or os.environ.get("OPENSKY_CLIENT_ID", "")
+        self.client_secret = client_secret or os.environ.get("OPENSKY_CLIENT_SECRET", "")
 
     async def poll(self) -> None:
         try:
-            async with aiohttp.ClientSession() as session:
+            auth = None
+            if self.client_id and self.client_secret:
+                auth = aiohttp.BasicAuth(self.client_id, self.client_secret)
+            async with aiohttp.ClientSession(auth=auth) as session:
                 for area_name, bbox in self.WATCH_AREAS.items():
                     params = {**bbox}
                     try:
@@ -3307,7 +3312,7 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         GieAgsiSource(queue, api_key=config.get("GIE_API_KEY", "")),
 
         # -- Aircraft Tracking --
-        OpenSkySource(queue),
+        OpenSkySource(queue, client_id=config.get("OPENSKY_CLIENT_ID", ""), client_secret=config.get("OPENSKY_CLIENT_SECRET", "")),
 
         # -- Real-Time Exchange Data --
         KrakenFundingRateSource(queue),
