@@ -83,6 +83,7 @@ ALL_SOURCES = [
     "AISStream", "AirNow", "ACLED",
     "CNN Fear&Greed", "Crypto F&G", "SentiCrypt", "StockTwits", "4chan /biz/",
     "Kalshi", "Metaculus", "PredictIt", "Manifold",
+    "Finnhub", "NewsAPI.ai", "MarketAux", "Currents API",
 ]
 
 # ── API keys we expect ───────────────────────────────────────────────────────

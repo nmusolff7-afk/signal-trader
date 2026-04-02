@@ -1694,6 +1694,11 @@ SOURCE_METHOD_MAP = {
     "Metaculus":            "fed",
     "PredictIt":            "fed",
     "Manifold":             "fed",
+    # News sentiment
+    "Finnhub":              "fed",
+    "NewsAPI.ai":           "fed",
+    "MarketAux":            "edgar",
+    "Currents API":         "fed",
 }
 
 # Sources where keyword will often fail — send to transformer

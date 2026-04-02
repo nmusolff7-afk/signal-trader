@@ -5444,6 +5444,232 @@ class ManifoldSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# FINNHUB — news + social + insider sentiment fusion
+# Free key. 60 calls/min. Multi-signal sentiment per ticker.
+# ═══════════════════════════════════════════════════════
+
+class FinnhubSource(BaseSource):
+    """Finnhub — news sentiment + social sentiment + insider MSPR. Free key."""
+    name = "Finnhub"
+    interval_seconds = 300.0
+
+    BASE_URL = "https://finnhub.io/api/v1"
+    TICKERS = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN"]
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("FINNHUB_API_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                for ticker in self.TICKERS:
+                    # News sentiment
+                    url = f"{self.BASE_URL}/news-sentiment?symbol={ticker}&token={self.api_key}"
+                    try:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    sentiment = data.get("sentiment", {})
+                    buzz = data.get("buzz", {})
+                    score = sentiment.get("bearishPercent", 0)
+                    bullish = sentiment.get("bullishPercent", 0)
+                    articles = buzz.get("articlesInLastWeek", 0)
+                    buzz_val = buzz.get("buzz", 0)
+
+                    key = f"finnhub-{ticker}-{bullish:.2f}-{articles}"
+                    if self._already_seen(key):
+                        continue
+
+                    if articles > 0:
+                        await self.emit({
+                            "text": f"Finnhub {ticker}: {bullish:.0%} bullish, {score:.0%} bearish ({articles} articles, buzz {buzz_val:.1f}x)",
+                            "ticker": ticker, "bullish": bullish, "bearish": score, "articles": articles,
+                            "extra_json": json.dumps({"ticker": ticker, "bullish": bullish, "bearish": score, "articles": articles}),
+                        })
+        except Exception as e:
+            log.warning("[Finnhub] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# NEWSAPI.AI — article-level sentiment + event clustering
+# Free key. 2000 searches/month, 200K articles.
+# ═══════════════════════════════════════════════════════
+
+class NewsApiAiSource(BaseSource):
+    """NewsAPI.ai — article sentiment + event clustering. Free key."""
+    name = "NewsAPI.ai"
+    interval_seconds = 1800.0  # conserve quota
+
+    API_URL = "https://eventregistry.org/api/v1/article/getArticles"
+
+    QUERIES = ["Federal Reserve", "crude oil sanctions", "tariff trade war", "crypto regulation"]
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("NEWSAPI_AI_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                for query in self.QUERIES:
+                    payload = {
+                        "apiKey": self.api_key,
+                        "keyword": query,
+                        "lang": "eng",
+                        "articlesCount": 3,
+                        "articlesSortBy": "date",
+                        "includeArticleSentiment": True,
+                        "resultType": "articles",
+                    }
+                    try:
+                        async with session.post(self.API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    articles = data.get("articles", {}).get("results", [])
+                    for art in articles:
+                        uri = art.get("uri", "")
+                        if not uri or self._already_seen(uri):
+                            continue
+                        title = art.get("title", "")[:120]
+                        sentiment = art.get("sentiment", 0)
+                        source_name = art.get("source", {}).get("title", "")
+
+                        try:
+                            sent_val = float(sentiment or 0)
+                        except (ValueError, TypeError):
+                            sent_val = 0
+
+                        await self.emit({
+                            "text": f"NewsAPI.ai: {title} (sentiment: {sent_val:+.2f}, via {source_name})",
+                            "title": title, "sentiment": sent_val, "source_name": source_name,
+                            "extra_json": json.dumps({"uri": uri, "sentiment": sent_val, "source": source_name}),
+                        })
+        except Exception as e:
+            log.warning("[NewsAPI.ai] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# MARKETAUX — entity-level per-ticker news sentiment
+# Free key. 100 req/day. Per-entity sentiment scores.
+# ═══════════════════════════════════════════════════════
+
+class MarketAuxSource(BaseSource):
+    """MarketAux — per-ticker entity-level news sentiment. Free key."""
+    name = "MarketAux"
+    interval_seconds = 3600.0  # conserve 100 req/day limit
+
+    API_URL = "https://api.marketaux.com/v1/news/all"
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("MARKETAUX_API_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+        try:
+            params = {
+                "api_token": self.api_key,
+                "symbols": "AAPL,TSLA,NVDA,MSFT,AMZN",
+                "filter_entities": "true",
+                "language": "en",
+                "limit": "5",
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            for art in data.get("data", []):
+                uuid = art.get("uuid", "")
+                if not uuid or self._already_seen(uuid):
+                    continue
+                title = art.get("title", "")[:120]
+                entities = art.get("entities", [])
+
+                # Per-entity sentiment
+                entity_sentiments = []
+                for ent in entities[:3]:
+                    sym = ent.get("symbol", "")
+                    sent = ent.get("sentiment_score", 0)
+                    if sym:
+                        entity_sentiments.append(f"{sym}:{sent:+.2f}")
+
+                ent_text = ", ".join(entity_sentiments) if entity_sentiments else "no entities"
+
+                await self.emit({
+                    "text": f"MarketAux: {title} [{ent_text}]",
+                    "title": title, "entities": entity_sentiments,
+                    "extra_json": json.dumps({"uuid": uuid, "entities": entity_sentiments}),
+                })
+        except Exception as e:
+            log.warning("[MarketAux] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# CURRENTS API — high-volume raw article text
+# Free key. 1000 req/day. 43K+ sources, 70+ countries.
+# ═══════════════════════════════════════════════════════
+
+class CurrentsApiSource(BaseSource):
+    """Currents API — high-volume news for NLP pipeline. Free key."""
+    name = "Currents API"
+    interval_seconds = 1800.0
+
+    API_URL = "https://api.currentsapi.services/v1/latest-news"
+
+    KEYWORDS = ["oil", "federal reserve", "tariff", "sanctions", "bitcoin", "recession"]
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("CURRENTS_API_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                for kw in self.KEYWORDS[:2]:  # conserve quota
+                    params = {"apiKey": self.api_key, "keywords": kw, "language": "en"}
+                    try:
+                        async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    for art in data.get("news", [])[:3]:
+                        aid = art.get("id", art.get("url", ""))
+                        if not aid or self._already_seen(aid):
+                            continue
+                        title = art.get("title", "")[:120]
+                        source_name = art.get("author", "")
+
+                        await self.emit({
+                            "text": f"Currents: {title} (via {source_name})",
+                            "title": title, "source_name": source_name,
+                            "extra_json": json.dumps({"id": aid, "title": title[:80]}),
+                        })
+        except Exception as e:
+            log.warning("[Currents API] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -5568,6 +5794,12 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         MetaculusSource(queue),
         PredictItSource(queue),
         ManifoldSource(queue),
+
+        # -- News Sentiment --
+        FinnhubSource(queue, api_key=config.get("FINNHUB_API_KEY", "")),
+        NewsApiAiSource(queue, api_key=config.get("NEWSAPI_AI_KEY", "")),
+        MarketAuxSource(queue, api_key=config.get("MARKETAUX_API_KEY", "")),
+        CurrentsApiSource(queue, api_key=config.get("CURRENTS_API_KEY", "")),
 
         # -- Aircraft Tracking --
         OpenSkySource(queue, client_id=config.get("OPENSKY_CLIENT_ID", ""), client_secret=config.get("OPENSKY_CLIENT_SECRET", "")),
