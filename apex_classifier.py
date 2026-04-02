@@ -1683,6 +1683,17 @@ SOURCE_METHOD_MAP = {
     "AirNow":               "noaa",
     # Conflict
     "ACLED":                "fed",
+    # Sentiment
+    "CNN Fear&Greed":       "fed",
+    "Crypto F&G":           "onchain",
+    "SentiCrypt":           "onchain",
+    "StockTwits":           "fed",
+    "4chan /biz/":           "onchain",
+    # Prediction markets
+    "Kalshi":               "fed",
+    "Metaculus":            "fed",
+    "PredictIt":            "fed",
+    "Manifold":             "fed",
 }
 
 # Sources where keyword will often fail — send to transformer

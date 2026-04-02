@@ -4981,6 +4981,468 @@ class AcledSource(BaseSource):
             log.warning("[ACLED] Error: %s", e)
 
 
+
+
+# ═══════════════════════════════════════════════════════
+# CNN FEAR & GREED INDEX (undocumented endpoint)
+# No auth. Intraday 7-component equity sentiment composite.
+# ═══════════════════════════════════════════════════════
+
+class CnnFearGreedSource(BaseSource):
+    """CNN Fear & Greed — 7-component equity sentiment (0-100). No auth."""
+    name = "CNN Fear&Greed"
+    interval_seconds = 900.0
+
+    async def poll(self) -> None:
+        try:
+            today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+            url = f"https://production.dataviz.cnn.io/index/fearandgreed/graphdata/{today}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            fg = data.get("fear_and_greed", {})
+            score = fg.get("score", 0)
+            rating = fg.get("rating", "")
+            prev_close = fg.get("previous_close", 0)
+
+            key = f"cnn-fg-{int(score)}"
+            if self._already_seen(key):
+                return
+
+            delta = score - prev_close if prev_close else 0
+            await self.emit({
+                "text": f"CNN Fear&Greed: {score:.0f}/100 ({rating}) {delta:+.1f} from prev close",
+                "score": score, "rating": rating, "delta": delta,
+                "extra_json": json.dumps({"score": score, "rating": rating, "delta": round(delta, 1)}),
+            })
+        except Exception as e:
+            log.warning("[CNN Fear&Greed] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# STOCKTWITS — pre-labeled bull/bear per ticker
+# No auth. Self-tagged sentiment on every message.
+# ═══════════════════════════════════════════════════════
+
+class StockTwitsSource(BaseSource):
+    """StockTwits — pre-labeled bull/bear messages per ticker. No auth."""
+    name = "StockTwits"
+    interval_seconds = 120.0
+
+    API_URL = "https://api.stocktwits.com/api/2/streams/symbol"
+    TICKERS = ["SPY", "QQQ", "AAPL", "TSLA", "NVDA", "BTC.X", "ETH.X"]
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                for ticker in self.TICKERS:
+                    url = f"{self.API_URL}/{ticker}.json"
+                    try:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    messages = data.get("messages", [])
+                    bulls = sum(1 for m in messages if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bullish")
+                    bears = sum(1 for m in messages if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bearish")
+                    total = len(messages)
+
+                    key = f"stwits-{ticker}-{bulls}-{bears}"
+                    if self._already_seen(key):
+                        continue
+
+                    ratio = bulls / max(bulls + bears, 1)
+                    signal = ""
+                    if ratio > 0.8:
+                        signal = " [EXTREME BULLISH]"
+                    elif ratio < 0.3:
+                        signal = " [EXTREME BEARISH]"
+
+                    await self.emit({
+                        "text": f"StockTwits {ticker}: {bulls}B/{bears}B of {total} msgs ({ratio:.0%} bullish){signal}",
+                        "ticker": ticker, "bulls": bulls, "bears": bears, "ratio": ratio,
+                        "extra_json": json.dumps({"ticker": ticker, "bulls": bulls, "bears": bears, "ratio": round(ratio, 2)}),
+                    })
+        except Exception as e:
+            log.warning("[StockTwits] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# 4CHAN /BIZ/ — anonymous unfiltered crypto/retail sentiment
+# No auth. 1 req/sec limit. Raw narrative detection.
+# ═══════════════════════════════════════════════════════
+
+class FourChanBizSource(BaseSource):
+    """4chan /biz/ — anonymous crypto/retail sentiment. No auth."""
+    name = "4chan /biz/"
+    interval_seconds = 300.0
+
+    CATALOG_URL = "https://a.4cdn.org/biz/catalog.json"
+
+    # Keywords that signal market-relevant discussion
+    MARKET_KEYWORDS = ["bitcoin", "btc", "ethereum", "eth", "crash", "moon", "pump", "dump",
+                       "recession", "fed", "inflation", "tariff", "short", "bull", "bear"]
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.CATALOG_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            for page in (data if isinstance(data, list) else []):
+                for thread in page.get("threads", [])[:5]:
+                    tid = thread.get("no", 0)
+                    if not tid or self._already_seen(str(tid)):
+                        continue
+
+                    sub = (thread.get("sub", "") or "").lower()
+                    com = (thread.get("com", "") or "").lower()
+                    replies = thread.get("replies", 0)
+                    text_combined = f"{sub} {com}"
+
+                    # Only emit threads with market keywords and decent engagement
+                    if replies < 10:
+                        continue
+                    if not any(kw in text_combined for kw in self.MARKET_KEYWORDS):
+                        continue
+
+                    # Clean HTML from comment
+                    import re
+                    clean_sub = re.sub(r'<[^>]+>', '', thread.get("sub", "") or "")[:80]
+                    clean_com = re.sub(r'<[^>]+>', '', thread.get("com", "") or "")[:80]
+                    display = clean_sub or clean_com
+
+                    await self.emit({
+                        "text": f"/biz/: {display} ({replies} replies)",
+                        "thread_id": tid, "replies": replies,
+                        "extra_json": json.dumps({"thread": tid, "replies": replies}),
+                    })
+        except Exception as e:
+            log.warning("[4chan /biz/] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# ALTERNATIVE.ME CRYPTO FEAR & GREED INDEX
+# No auth. Daily composite BTC sentiment (0-100).
+# ═══════════════════════════════════════════════════════
+
+class CryptoFearGreedSource(BaseSource):
+    """Alternative.me Crypto Fear & Greed — daily BTC sentiment. No auth."""
+    name = "Crypto F&G"
+    interval_seconds = 3600.0
+
+    API_URL = "https://api.alternative.me/fng/?limit=1"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            items = data.get("data", [])
+            if not items:
+                return
+
+            item = items[0]
+            value = int(item.get("value", 0))
+            classification = item.get("value_classification", "")
+            timestamp = item.get("timestamp", "")
+
+            key = f"crypto-fg-{timestamp}"
+            if self._already_seen(key):
+                return
+
+            signal = ""
+            if value <= 20:
+                signal = " [EXTREME FEAR — contrarian BUY zone]"
+            elif value >= 80:
+                signal = " [EXTREME GREED — contrarian SELL zone]"
+
+            await self.emit({
+                "text": f"Crypto F&G: {value}/100 ({classification}){signal}",
+                "value": value, "classification": classification,
+                "extra_json": json.dumps({"value": value, "class": classification}),
+            })
+        except Exception as e:
+            log.warning("[Crypto F&G] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# SENTICRYPT — BTC Twitter NLP sentiment (2-hour updates)
+# No auth. Scores -1.0 to +1.0.
+# ═══════════════════════════════════════════════════════
+
+class SentiCryptSource(BaseSource):
+    """SentiCrypt — BTC Twitter NLP sentiment scores. No auth."""
+    name = "SentiCrypt"
+    interval_seconds = 7200.0  # every 2 hours (matches update frequency)
+
+    API_URL = "https://api.senticrypt.com/v2/latest.json"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            if not data:
+                return
+
+            # Latest entry
+            latest = data[-1] if isinstance(data, list) else data
+            mean = float(latest.get("mean", 0) or 0)
+            median = float(latest.get("median", 0) or 0)
+            rate = latest.get("rate", 0)  # post volume
+            ts = latest.get("date", latest.get("timestamp", ""))
+
+            key = f"senticrypt-{ts}"
+            if self._already_seen(key):
+                return
+
+            signal = ""
+            if mean > 0.3:
+                signal = " [STRONGLY POSITIVE]"
+            elif mean < -0.3:
+                signal = " [STRONGLY NEGATIVE]"
+
+            await self.emit({
+                "text": f"SentiCrypt: BTC sentiment mean={mean:+.3f} median={median:+.3f} vol={rate}{signal}",
+                "mean": mean, "median": median, "rate": rate,
+                "extra_json": json.dumps({"mean": mean, "median": median, "rate": rate}),
+            })
+        except Exception as e:
+            log.warning("[SentiCrypt] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# KALSHI PUBLIC API — real-money regulated event contracts
+# No auth for reads. CFTC-regulated prediction market.
+# ═══════════════════════════════════════════════════════
+
+class KalshiSource(BaseSource):
+    """Kalshi — real-money regulated event contracts (CPI, GDP, Fed, weather). No auth."""
+    name = "Kalshi"
+    interval_seconds = 120.0
+
+    API_URL = "https://api.elections.kalshi.com/trade-api/v2/markets"
+
+    TRACKED_KEYWORDS = ["fed", "cpi", "inflation", "gdp", "recession", "unemployment",
+                        "rate", "bitcoin", "oil", "hurricane", "shutdown"]
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                params = {"limit": "50", "status": "open"}
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            markets = data.get("markets", [])
+            for m in markets:
+                ticker = m.get("ticker", "")
+                title = m.get("title", m.get("event_title", ""))
+                yes_price = m.get("yes_bid", m.get("last_price", 0))
+                volume = m.get("volume", 0)
+
+                if not title:
+                    continue
+
+                t_lower = title.lower()
+                relevant = any(kw in t_lower for kw in self.TRACKED_KEYWORDS)
+                if not relevant:
+                    continue
+
+                key = f"kalshi-{ticker}-{yes_price}"
+                if self._already_seen(key):
+                    continue
+
+                prob = float(yes_price) * 100 if yes_price and float(yes_price) <= 1 else float(yes_price or 0)
+
+                await self.emit({
+                    "text": f"Kalshi: \"{title[:80]}\" at {prob:.0f}% (vol: {volume})",
+                    "ticker": ticker, "title": title[:120], "probability": prob, "volume": volume,
+                    "extra_json": json.dumps({"ticker": ticker, "prob": round(prob, 1), "vol": volume}),
+                })
+        except Exception as e:
+            log.warning("[Kalshi] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# METACULUS — calibrated long-horizon forecasts
+# No auth for public questions. ML-weighted predictions.
+# ═══════════════════════════════════════════════════════
+
+class MetaculusSource(BaseSource):
+    """Metaculus — calibrated crowd forecasts on geopolitics/economics. No auth."""
+    name = "Metaculus"
+    interval_seconds = 1800.0
+
+    API_URL = "https://www.metaculus.com/api2/questions/"
+
+    TRACKED_KEYWORDS = ["nuclear", "recession", "war", "pandemic", "inflation",
+                        "fed", "bitcoin", "ai", "china", "taiwan", "oil"]
+
+    async def poll(self) -> None:
+        try:
+            params = {"status": "open", "order_by": "-last_prediction_time", "limit": "30"}
+            headers = {"Accept": "application/json"}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            results = data.get("results", data) if isinstance(data, dict) else data
+            for q in (results if isinstance(results, list) else []):
+                qid = q.get("id", "")
+                title = q.get("title", "")[:120]
+                prediction = q.get("community_prediction", {})
+
+                if not title:
+                    continue
+
+                t_lower = title.lower()
+                relevant = any(kw in t_lower for kw in self.TRACKED_KEYWORDS)
+                if not relevant:
+                    continue
+
+                # Get probability (binary) or median (continuous)
+                prob = None
+                if isinstance(prediction, dict):
+                    prob = prediction.get("full", {}).get("q2") or prediction.get("q2")
+                elif isinstance(prediction, (int, float)):
+                    prob = prediction
+
+                key = f"metaculus-{qid}-{prob}"
+                if self._already_seen(key):
+                    continue
+
+                prob_text = f" — {float(prob)*100:.0f}%" if prob and float(prob) <= 1 else (f" — {prob}" if prob else "")
+
+                await self.emit({
+                    "text": f"Metaculus: \"{title}\"{prob_text}",
+                    "question_id": qid, "title": title, "prediction": prob,
+                    "extra_json": json.dumps({"id": qid, "title": title[:80], "pred": prob}),
+                })
+        except Exception as e:
+            log.warning("[Metaculus] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# PREDICTIT — US political market prices
+# No auth. Real-money contracts (~180 active markets).
+# ═══════════════════════════════════════════════════════
+
+class PredictItSource(BaseSource):
+    """PredictIt — US political market prices. No auth."""
+    name = "PredictIt"
+    interval_seconds = 300.0
+
+    API_URL = "https://www.predictit.org/api/marketdata/all/"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            markets = data.get("markets", [])
+            for m in markets[:20]:  # top 20 by volume
+                mid = m.get("id", "")
+                name = m.get("name", m.get("shortName", ""))[:100]
+                contracts = m.get("contracts", [])
+
+                if not contracts:
+                    continue
+
+                # Get the top contract
+                top = max(contracts, key=lambda c: c.get("lastTradePrice", 0) or 0)
+                contract_name = top.get("name", top.get("shortName", ""))[:60]
+                price = top.get("lastTradePrice", 0)
+
+                key = f"predictit-{mid}-{price}"
+                if self._already_seen(key):
+                    continue
+
+                prob = float(price) * 100 if price else 0
+
+                await self.emit({
+                    "text": f"PredictIt: \"{name}\" — {contract_name} at {prob:.0f}%",
+                    "market_id": mid, "market": name, "contract": contract_name, "probability": prob,
+                    "extra_json": json.dumps({"id": mid, "market": name[:60], "prob": round(prob, 1)}),
+                })
+        except Exception as e:
+            log.warning("[PredictIt] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# MANIFOLD MARKETS — calibrated prediction market (REST)
+# No auth for reads. Fast-spinning markets on breaking events.
+# ═══════════════════════════════════════════════════════
+
+class ManifoldSource(BaseSource):
+    """Manifold Markets — prediction markets on breaking events. No auth."""
+    name = "Manifold"
+    interval_seconds = 120.0
+
+    API_URL = "https://api.manifold.markets/v0/markets"
+
+    TRACKED = ["fed", "recession", "nuclear", "war", "bitcoin", "trump",
+               "election", "inflation", "ai", "china", "tariff"]
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                params = {"limit": "50", "sort": "last-updated"}
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            for m in (data if isinstance(data, list) else []):
+                mid = m.get("id", "")
+                question = m.get("question", "")[:120]
+                prob = m.get("probability", 0)
+                volume = m.get("volume", 0)
+
+                if not question:
+                    continue
+
+                q_lower = question.lower()
+                relevant = any(kw in q_lower for kw in self.TRACKED)
+                if not relevant:
+                    continue
+
+                prob_pct = float(prob) * 100 if prob and float(prob) <= 1 else float(prob or 0)
+
+                key = f"manifold-{mid}-{int(prob_pct)}"
+                if self._already_seen(key):
+                    continue
+
+                await self.emit({
+                    "text": f"Manifold: \"{question}\" at {prob_pct:.0f}% (vol: ${volume:,.0f})",
+                    "market_id": mid, "question": question, "probability": prob_pct, "volume": volume,
+                    "extra_json": json.dumps({"id": mid, "question": question[:80], "prob": round(prob_pct, 1)}),
+                })
+        except Exception as e:
+            log.warning("[Manifold] Error: %s", e)
+
+
 # ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
@@ -5093,6 +5555,19 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
 
         # -- Conflict Intelligence --
         AcledSource(queue, email=config.get("ACLED_EMAIL", ""), password=config.get("ACLED_PASSWORD", "")),
+
+        # -- Sentiment / Fear & Greed --
+        CnnFearGreedSource(queue),
+        CryptoFearGreedSource(queue),
+        SentiCryptSource(queue),
+        StockTwitsSource(queue),
+        FourChanBizSource(queue),
+
+        # -- Prediction Markets --
+        KalshiSource(queue),
+        MetaculusSource(queue),
+        PredictItSource(queue),
+        ManifoldSource(queue),
 
         # -- Aircraft Tracking --
         OpenSkySource(queue, client_id=config.get("OPENSKY_CLIENT_ID", ""), client_secret=config.get("OPENSKY_CLIENT_SECRET", "")),

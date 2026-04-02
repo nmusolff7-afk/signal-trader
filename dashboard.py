@@ -81,6 +81,8 @@ ALL_SOURCES = [
     "NASA EONET", "NIFC Wildfire", "USGS Volcano", "Copernicus EMS",
     "NOAA Buoys", "CelesTrak", "UK Carbon", "US Drought",
     "AISStream", "AirNow", "ACLED",
+    "CNN Fear&Greed", "Crypto F&G", "SentiCrypt", "StockTwits", "4chan /biz/",
+    "Kalshi", "Metaculus", "PredictIt", "Manifold",
 ]
 
 # ── API keys we expect ───────────────────────────────────────────────────────
