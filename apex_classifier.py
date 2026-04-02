@@ -1677,6 +1677,12 @@ SOURCE_METHOD_MAP = {
     "UK Carbon":            "eia",
     # Agriculture
     "US Drought":           "eia",
+    # Maritime / vessel
+    "AISStream":            "noaa",
+    # Air quality
+    "AirNow":               "noaa",
+    # Conflict
+    "ACLED":                "fed",
 }
 
 # Sources where keyword will often fail — send to transformer

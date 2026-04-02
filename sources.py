@@ -4728,6 +4728,225 @@ class DroughtMonitorSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# AISSTREAM.IO — Real-time global vessel tracking (REST poll)
+# Free API key. Vessel positions, cargo type, destination.
+# ═══════════════════════════════════════════════════════
+
+class AisStreamSource(BaseSource):
+    """AISStream — vessel positions near key energy chokepoints. Free key."""
+    name = "AISStream"
+    interval_seconds = 60.0
+
+    # REST search endpoint for vessels in bounding boxes
+    API_URL = "https://api.aisstream.io/v0/search"
+
+    # Key maritime chokepoints for energy trading
+    WATCH_ZONES = {
+        "Strait of Hormuz": [[25.0, 55.0], [27.0, 57.0]],
+        "Suez Canal": [[29.5, 32.0], [31.5, 33.0]],
+        "Houston Ship Channel": [[29.3, -95.5], [29.8, -94.5]],
+    }
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("AISSTREAM_API_KEY", "")
+        self._last_counts = {}
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+
+        try:
+            headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+            async with aiohttp.ClientSession() as session:
+                for zone_name, bbox in self.WATCH_ZONES.items():
+                    payload = {
+                        "BoundingBoxes": [bbox],
+                        "FilterMessageTypes": ["PositionReport"],
+                    }
+                    try:
+                        async with session.post(
+                            self.API_URL,
+                            json=payload,
+                            headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=10),
+                        ) as resp:
+                            if resp.status != 200:
+                                # Try GET fallback — some API versions differ
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    vessels = data if isinstance(data, list) else data.get("data", data.get("vessels", []))
+                    count = len(vessels) if isinstance(vessels, list) else 0
+
+                    last = self._last_counts.get(zone_name, 0)
+                    self._last_counts[zone_name] = count
+
+                    key = f"ais-{zone_name}-{count}"
+                    if self._already_seen(key):
+                        continue
+
+                    delta = count - last
+                    delta_text = f" ({delta:+d})" if last > 0 else ""
+
+                    await self.emit({
+                        "text": f"AISStream: {zone_name} — {count} vessels{delta_text}",
+                        "zone": zone_name,
+                        "vessel_count": count,
+                        "extra_json": json.dumps({"zone": zone_name, "count": count, "delta": delta}),
+                    })
+
+        except Exception as e:
+            log.warning("[AISStream] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# AIRNOW — US Air Quality Index
+# Free API key. AQI at key industrial/population centers.
+# ═══════════════════════════════════════════════════════
+
+class AirNowSource(BaseSource):
+    """AirNow — AQI readings at key US locations. Free key."""
+    name = "AirNow"
+    interval_seconds = 3600.0  # hourly
+
+    API_URL = "https://www.airnowapi.org/aq/observation/latLong/current/"
+
+    # Key locations: Houston (refineries), LA (ports), NYC (finance), Chicago (CBOT)
+    LOCATIONS = {
+        "Houston": {"lat": 29.76, "lon": -95.37},
+        "Los Angeles": {"lat": 34.05, "lon": -118.24},
+        "New York": {"lat": 40.71, "lon": -74.01},
+        "Chicago": {"lat": 41.88, "lon": -87.63},
+    }
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("AIRNOW_API_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                for city, coords in self.LOCATIONS.items():
+                    params = {
+                        "format": "application/json",
+                        "API_KEY": self.api_key,
+                        "latitude": coords["lat"],
+                        "longitude": coords["lon"],
+                        "distance": "25",
+                    }
+                    try:
+                        async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    for reading in (data if isinstance(data, list) else []):
+                        aqi = reading.get("AQI", 0)
+                        param = reading.get("ParameterName", "")
+                        category = reading.get("Category", {}).get("Name", "")
+
+                        key = f"airnow-{city}-{param}-{aqi}"
+                        if self._already_seen(key):
+                            continue
+
+                        alert = ""
+                        if aqi > 150:
+                            alert = " [UNHEALTHY]"
+                        elif aqi > 200:
+                            alert = " [VERY UNHEALTHY]"
+                        elif aqi > 300:
+                            alert = " [HAZARDOUS]"
+
+                        await self.emit({
+                            "text": f"AirNow: {city} {param} AQI={aqi} ({category}){alert}",
+                            "city": city,
+                            "parameter": param,
+                            "aqi": aqi,
+                            "category": category,
+                            "extra_json": json.dumps({"city": city, "param": param, "aqi": aqi}),
+                        })
+
+        except Exception as e:
+            log.warning("[AirNow] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# ACLED CONFLICT DATA
+# Free registration. Battles, protests, explosions geolocated.
+# ═══════════════════════════════════════════════════════
+
+class AcledSource(BaseSource):
+    """ACLED — geolocated conflict events worldwide. Free key + email."""
+    name = "ACLED"
+    interval_seconds = 3600.0  # hourly (data is weekly)
+
+    API_URL = "https://api.acleddata.com/acled/read"
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = "", email: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("ACLED_API_KEY", "")
+        self.email = email or os.environ.get("ACLED_EMAIL", "")
+
+    async def poll(self) -> None:
+        if not self.api_key or not self.email:
+            return
+
+        try:
+            now = datetime.datetime.utcnow()
+            week_ago = (now - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+
+            params = {
+                "key": self.api_key,
+                "email": self.email,
+                "event_date": week_ago,
+                "event_date_where": ">=",
+                "limit": "20",
+                "fields": "event_id_cnty|event_date|event_type|country|admin1|fatalities|notes",
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            events = data.get("data", [])
+            for event in (events if isinstance(events, list) else [])[:10]:
+                eid = event.get("event_id_cnty", "")
+                if not eid or self._already_seen(eid):
+                    continue
+
+                event_type = event.get("event_type", "")
+                country = event.get("country", "")
+                region = event.get("admin1", "")
+                fatalities = event.get("fatalities", 0)
+                date = event.get("event_date", "")
+                notes = event.get("notes", "")[:120]
+
+                await self.emit({
+                    "text": f"ACLED: {event_type} in {country}/{region} — {fatalities} fatalities ({date})",
+                    "event_type": event_type,
+                    "country": country,
+                    "fatalities": fatalities,
+                    "extra_json": json.dumps({
+                        "id": eid, "type": event_type,
+                        "country": country, "fatalities": fatalities,
+                    }),
+                })
+
+        except Exception as e:
+            log.warning("[ACLED] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -4830,6 +5049,15 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
 
         # -- Energy Grid (International) --
         UkCarbonSource(queue),
+
+        # -- Maritime / Vessel Tracking --
+        AisStreamSource(queue, api_key=config.get("AISSTREAM_API_KEY", "")),
+
+        # -- Air Quality --
+        AirNowSource(queue, api_key=config.get("AIRNOW_API_KEY", "")),
+
+        # -- Conflict Intelligence --
+        AcledSource(queue, api_key=config.get("ACLED_API_KEY", ""), email=config.get("ACLED_EMAIL", "")),
 
         # -- Aircraft Tracking --
         OpenSkySource(queue, client_id=config.get("OPENSKY_CLIENT_ID", ""), client_secret=config.get("OPENSKY_CLIENT_SECRET", "")),

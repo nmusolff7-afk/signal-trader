@@ -80,6 +80,7 @@ ALL_SOURCES = [
     "BBC News", "Al Jazeera", "Hacker News", "ReliefWeb",
     "NASA EONET", "NIFC Wildfire", "USGS Volcano", "Copernicus EMS",
     "NOAA Buoys", "CelesTrak", "UK Carbon", "US Drought",
+    "AISStream", "AirNow", "ACLED",
 ]
 
 # ── API keys we expect ───────────────────────────────────────────────────────
