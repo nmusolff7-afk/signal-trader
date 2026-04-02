@@ -805,64 +805,58 @@ class EtherscanSource(BaseSource):
 
     async def poll(self) -> None:
         if not self.api_key:
-            log.warning("[Etherscan] No API key set. Set ETHERSCAN_API_KEY env var.")
-            return
+            return  # silent — no key configured
 
         try:
             async with aiohttp.ClientSession() as session:
-                # Monitor latest internal transactions (covers whale transfers)
-                params = {
-                    "module": "account",
-                    "action": "txlistinternal",
-                    "address": "0x0000000000000000000000000000000000000000",  # Placeholder
-                    "startblock": 0,
-                    "endblock": 99999999,
-                    "sort": "desc",
-                    "apikey": self.api_key
-                }
+                # Gas tracker — always returns data, good heartbeat
+                params = {"module": "gastracker", "action": "gasoracle", "apikey": self.api_key}
                 async with session.get(self.ETHERSCAN_API_URL, params=params, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     if resp.status != 200:
-                        log.warning("[Etherscan] HTTP %s", resp.status)
                         return
                     data = await resp.json()
-        except Exception as exc:
-            log.warning("[Etherscan] poll error: %s", exc)
-            return
 
-        try:
-            if data.get("status") != "1":  # Etherscan uses status "1" for success
-                return
-            
-            txs = data.get("result", [])
-            if not txs:
-                return
+                if data.get("status") == "1":
+                    result = data.get("result", {})
+                    fast = result.get("FastGasPrice", "")
+                    safe = result.get("SafeGasPrice", "")
+                    base = result.get("suggestBaseFee", "")
 
-            for tx in txs[:5]:  # Check top 5 recent txs
-                tx_hash = tx.get("hash", "")
-                if self._already_seen(tx_hash):
-                    continue
-
-                value_eth = float(tx.get("value", 0)) / 1e18  # Convert Wei to ETH
-
-                if value_eth > 100:  # Large transfer threshold
-                    from_addr = tx.get("from", "")[:10]
-                    to_addr = tx.get("to", "")[:10]
-                    
-                    await self.emit({
-                        "text": f"Etherscan: Large ETH transfer {value_eth:.2f} ETH ({from_addr}...→{to_addr}...)",
-                        "value_eth": value_eth,
-                        "tx_hash": tx_hash,
-                        "from": tx.get("from", ""),
-                        "to": tx.get("to", ""),
-                        "extra_json": json.dumps({
-                            "value_eth": value_eth,
-                            "tx": tx_hash,
-                            "from": tx.get("from", ""),
-                            "to": tx.get("to", "")
+                    key = f"etherscan-gas-{fast}-{safe}"
+                    if not self._already_seen(key):
+                        await self.emit({
+                            "text": f"Etherscan: ETH gas — fast {fast} gwei, safe {safe} gwei, base {base} gwei",
+                            "fast_gwei": fast,
+                            "safe_gwei": safe,
+                            "base_fee": base,
+                            "extra_json": json.dumps({"fast": fast, "safe": safe, "base": base}),
                         })
-                    })
+
+                # ETH supply stats
+                params2 = {"module": "stats", "action": "ethsupply2", "apikey": self.api_key}
+                async with session.get(self.ETHERSCAN_API_URL, params=params2, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status != 200:
+                        return
+                    data2 = await resp.json()
+
+                if data2.get("status") == "1":
+                    result = data2.get("result", {})
+                    supply = float(result.get("EthSupply", 0)) / 1e18
+                    staking = float(result.get("Eth2Staking", 0)) / 1e18
+                    burnt = float(result.get("BurntFees", 0)) / 1e18
+
+                    key2 = f"etherscan-supply-{int(supply)}"
+                    if not self._already_seen(key2):
+                        await self.emit({
+                            "text": f"Etherscan: ETH supply {supply:,.0f}, staked {staking:,.0f}, burnt {burnt:,.0f}",
+                            "eth_supply": supply,
+                            "eth_staked": staking,
+                            "eth_burnt": burnt,
+                            "extra_json": json.dumps({"supply": supply, "staked": staking, "burnt": burnt}),
+                        })
+
         except Exception as e:
-            log.warning("[Etherscan] parse error: %s", e)
+            log.warning("[Etherscan] Error: %s", e)
 
 
 # ═══════════════════════════════════════════════════════
@@ -2648,17 +2642,25 @@ class GdeltDocSource(BaseSource):
                         async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                             if resp.status != 200:
                                 continue
-                            data = await resp.json()
+                            text = await resp.text()
+                            try:
+                                data = json.loads(text)
+                            except json.JSONDecodeError:
+                                continue
                     except Exception:
                         continue
 
-                    articles = data.get("articles", [])
+                    # GDELT returns articles at top level or nested
+                    articles = data if isinstance(data, list) else data.get("articles", data.get("article", []))
                     for article in articles[:3]:
                         url = article.get("url", "")
                         if not url or self._already_seen(url):
                             continue
                         title = article.get("title", "")
-                        tone = article.get("tone", 0)
+                        try:
+                            tone = float(article.get("tone", 0) or 0)
+                        except (ValueError, TypeError):
+                            tone = 0.0
                         domain = article.get("domain", "")
                         lang = article.get("language", "")
 
