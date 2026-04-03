@@ -41,44 +41,78 @@ class BaseSource(ABC):
     name: str = "Unknown"
     interval_seconds: float = 60.0   # How often to check for new data
 
-    # How long (seconds) before a seen key expires and can re-emit.
-    # Override per-source for different dedup windows.
-    seen_ttl: float = 300.0   # 5 min default — sources re-emit after this
+    # Dedup: only suppress truly identical content within this window.
+    # After TTL expires, the SAME content will re-emit (this is correct —
+    # the RL model needs periodic state updates even if data hasn't changed).
+    seen_ttl: float = 300.0   # 5 min default
+
+    # Set True on sources that should emit every poll regardless of content.
+    # Use for price feeds, funding rates, and other continuous data.
+    always_emit: bool = False
+
+    # Shared HTTP session — set by main.py at startup, reused by all sources.
+    # Eliminates thousands of TCP handshakes per minute.
+    _shared_session: 'aiohttp.ClientSession | None' = None
 
     def __init__(self, queue: asyncio.Queue):
         self.queue = queue
-        self._seen: dict[str, float] = {}   # key -> timestamp when first seen
+        self._seen: dict[str, float] = {}
+        self._poll_count = 0
+
+    @classmethod
+    def set_shared_session(cls, session: 'aiohttp.ClientSession') -> None:
+        """Set a shared aiohttp session for all sources. Call once at startup."""
+        cls._shared_session = session
+
+    def get_session(self) -> 'aiohttp.ClientSession':
+        """Get the shared session, or create a temporary one if not set."""
+        if self._shared_session is not None:
+            return self._shared_session
+        # Fallback: create per-source session (not ideal but works)
+        return aiohttp.ClientSession()
 
     def _now(self) -> str:
         return datetime.datetime.utcnow().isoformat()
 
     def _already_seen(self, key: str) -> bool:
-        """Return True if we've sent this item recently (within seen_ttl)."""
-        import time
-        now = time.time()
+        """
+        Dedup with TTL expiry. Returns True if this EXACT key was seen
+        within the last seen_ttl seconds. After TTL, allows re-emit.
 
-        # Expire old entries
-        if len(self._seen) > 500:
+        For always_emit sources, this always returns False.
+        """
+        if self.always_emit:
+            return False
+
+        import time as _time
+        now = _time.time()
+
+        # Expire old entries periodically
+        if len(self._seen) > 300:
             cutoff = now - self.seen_ttl
             self._seen = {k: v for k, v in self._seen.items() if v > cutoff}
 
         if key in self._seen:
-            # Check if it's expired
             if now - self._seen[key] < self.seen_ttl:
                 return True
-            # Expired — allow re-emit
-            self._seen[key] = now
-            return False
-
+            # Expired — re-emit allowed
         self._seen[key] = now
         return False
 
     async def emit(self, item: dict) -> None:
-        """Put a new item on the shared queue."""
+        """Put a new item on the shared queue. Non-blocking."""
         item["ts"] = item.get("ts", self._now())
         item["source"] = self.name
-        await self.queue.put(item)
-        log.info("[%s] emitted: %s", self.name, item.get("text", "")[:80])
+        try:
+            self.queue.put_nowait(item)
+        except asyncio.QueueFull:
+            # Drop oldest items if queue is full — don't block the source
+            try:
+                self.queue.get_nowait()
+                self.queue.put_nowait(item)
+            except asyncio.QueueEmpty:
+                pass
+        log.debug("[%s] emitted: %s", self.name, item.get("text", "")[:60])
 
     @abstractmethod
     async def poll(self) -> None:
@@ -88,11 +122,14 @@ class BaseSource(ABC):
     async def run(self) -> None:
         """Main loop. Polls forever, sleeping interval_seconds between calls."""
         log.info("[%s] source started (interval: %ss)", self.name, self.interval_seconds)
+        # Stagger startup to avoid thundering herd — spread sources over first 30s
+        import random
+        await asyncio.sleep(random.uniform(0, min(30, self.interval_seconds)))
         while True:
+            self._poll_count += 1
             try:
                 await self.poll()
             except Exception as exc:
-                # Log but don't crash — a bad response shouldn't kill the loop
                 log.warning("[%s] poll error: %s", self.name, exc)
             await asyncio.sleep(self.interval_seconds)
 
@@ -644,6 +681,7 @@ class KrakenFundingRateSource(BaseSource):
     """
     name = "Kraken Funding"
     interval_seconds = 5.0
+    always_emit = True
     seen_ttl = 30
 
     # Kraken perp symbol → human label
@@ -712,6 +750,7 @@ class OkxFundingRateSource(BaseSource):
     """OKX perpetuals funding rates"""
     name = "OKX Funding"
     interval_seconds = 5.0
+    always_emit = True
     seen_ttl = 30
     
     def __init__(self, queue: asyncio.Queue):
@@ -760,6 +799,7 @@ class BlockchainComSource(BaseSource):
     """Monitor large BTC transfers in real-time"""
     name = "Blockchain.com"
     interval_seconds = 10.0
+    always_emit = True
     seen_ttl = 60
     
     async def poll(self) -> None:
@@ -814,6 +854,7 @@ class EtherscanSource(BaseSource):
     """
     name = "Etherscan"
     interval_seconds = 10.0
+    always_emit = True
 
     ETHERSCAN_API_URL = "https://api.etherscan.io/api"
 
@@ -901,7 +942,8 @@ class CoinGeckoSource(BaseSource):
       - E090: Network transaction volume surge
     """
     name = "CoinGecko"
-    interval_seconds = 60.0  # Every 5 minutes
+    interval_seconds = 60.0
+    always_emit = True  # Every 5 minutes
 
     COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
 
@@ -1414,6 +1456,7 @@ class KrakenPriceSource(BaseSource):
     """
     name = "Kraken Price"
     interval_seconds = 5.0
+    always_emit = True
     seen_ttl = 0  # never dedup — always emit
 
     TICKER_URL = "https://api.kraken.com/0/public/Ticker"
@@ -1493,6 +1536,7 @@ class UsgsEarthquakeSource(BaseSource):
     """
     name = "USGS Earthquake"
     interval_seconds = 30.0
+    always_emit = True
 
     FEED_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_hour.geojson"
     # Fallback to larger window if hourly is empty
@@ -1733,7 +1777,8 @@ class NwsSevereWeatherSource(BaseSource):
     FREE. No API key required.
     """
     name = "NWS Weather"
-    interval_seconds = 120.0  # every 5 min
+    interval_seconds = 120.0
+    always_emit = True  # every 5 min
 
     ALERTS_URL = "https://api.weather.gov/alerts/active"
 
@@ -1987,6 +2032,7 @@ class PolymarketSource(BaseSource):
     """
     name = "Polymarket"
     interval_seconds = 30.0
+    always_emit = True
     seen_ttl = 60  # every 1 min
 
     API_URL = "https://gamma-api.polymarket.com/markets"
@@ -2555,6 +2601,7 @@ class DydxSource(BaseSource):
     """dYdX v4 perpetual markets — funding, OI, volume. No auth."""
     name = "dYdX"
     interval_seconds = 30.0
+    always_emit = True
     seen_ttl = 30
 
     MARKETS_URL = "https://indexer.dydx.trade/v4/perpetualMarkets"
@@ -2619,6 +2666,7 @@ class MempoolSource(BaseSource):
     """Bitcoin mempool fees + difficulty adjustment. No auth."""
     name = "Mempool"
     interval_seconds = 15.0
+    always_emit = True
     seen_ttl = 15
 
     FEES_URL = "https://mempool.space/api/v1/fees/recommended"
@@ -3073,6 +3121,7 @@ class OpenSkySource(BaseSource):
     """
     name = "OpenSky"
     interval_seconds = 15.0
+    always_emit = True
 
     API_URL = "https://opensky-network.org/api/states/all"
 
@@ -3622,6 +3671,7 @@ class CboePcRatioSource(BaseSource):
     """CBOE equity put/call ratio — contrarian sentiment. No auth."""
     name = "CBOE P/C"
     interval_seconds = 1800.0
+    always_emit = True
 
     EQUITY_URL = "https://cdn.cboe.com/resources/options/volume_and_call_put_ratios/equitypc.csv"
 
@@ -3678,6 +3728,7 @@ class DefiLlamaSource(BaseSource):
     """DeFi Llama — TVL + stablecoin supply + DEX volume. No auth."""
     name = "DeFi Llama"
     interval_seconds = 600.0
+    always_emit = True
 
     STABLECOIN_URL = "https://stablecoins.llama.fi/stablecoins?includePrices=true"
     TVL_URL = "https://api.llama.fi/v2/historicalChainTvl"
@@ -3736,6 +3787,7 @@ class HyperliquidSource(BaseSource):
     """Hyperliquid DEX — perpetual funding/OI/volume. No auth."""
     name = "Hyperliquid"
     interval_seconds = 30.0
+    always_emit = True
     seen_ttl = 30
 
     API_URL = "https://api.hyperliquid.xyz/info"
@@ -3933,6 +3985,7 @@ class NoaaCoopsSource(BaseSource):
     """NOAA CO-OPS water levels at key ports. No auth."""
     name = "NOAA Ports"
     interval_seconds = 300.0
+    always_emit = True
 
     API_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 
@@ -4511,6 +4564,7 @@ class NoaaBuoySource(BaseSource):
     """NOAA NDBC ocean buoys — wind, waves, pressure at key locations. No auth."""
     name = "NOAA Buoys"
     interval_seconds = 900.0
+    always_emit = True
 
     STATIONS = {
         "42001": "Gulf of Mexico Central",
@@ -5119,6 +5173,7 @@ class StockTwitsSource(BaseSource):
     """StockTwits — pre-labeled bull/bear messages per ticker. No auth."""
     name = "StockTwits"
     interval_seconds = 60.0
+    always_emit = True
     seen_ttl = 120
 
     API_URL = "https://api.stocktwits.com/api/2/streams/symbol"
@@ -5228,6 +5283,7 @@ class CryptoFearGreedSource(BaseSource):
     """Alternative.me Crypto Fear & Greed — daily BTC sentiment. No auth."""
     name = "Crypto F&G"
     interval_seconds = 1800.0
+    always_emit = True
 
     API_URL = "https://api.alternative.me/fng/?limit=1"
 
@@ -5325,6 +5381,7 @@ class KalshiSource(BaseSource):
     """Kalshi — real-money regulated event contracts (CPI, GDP, Fed, weather). No auth."""
     name = "Kalshi"
     interval_seconds = 60.0
+    always_emit = True
     seen_ttl = 60
 
     API_URL = "https://api.elections.kalshi.com/trade-api/v2/markets"
@@ -5441,6 +5498,7 @@ class PredictItSource(BaseSource):
     """PredictIt — US political market prices. No auth."""
     name = "PredictIt"
     interval_seconds = 120.0
+    always_emit = True
 
     API_URL = "https://www.predictit.org/api/marketdata/all/"
 
@@ -5490,6 +5548,7 @@ class ManifoldSource(BaseSource):
     """Manifold Markets — prediction markets on breaking events. No auth."""
     name = "Manifold"
     interval_seconds = 60.0
+    always_emit = True
     seen_ttl = 60
 
     API_URL = "https://api.manifold.markets/v0/markets"
@@ -5544,6 +5603,7 @@ class FinnhubSource(BaseSource):
     """Finnhub — news sentiment + social sentiment + insider MSPR. Free key."""
     name = "Finnhub"
     interval_seconds = 120.0
+    always_emit = True
     seen_ttl = 120
 
     BASE_URL = "https://finnhub.io/api/v1"
@@ -5773,6 +5833,7 @@ class NyFedRatesSource(BaseSource):
     """NY Fed Markets — SOFR, EFFR, OBFR, repo ops. No auth."""
     name = "NY Fed Rates"
     interval_seconds = 300.0
+    always_emit = True
 
     RATES_URL = "https://markets.newyorkfed.org/api/rates/all/latest.json"
     RRP_URL = "https://markets.newyorkfed.org/api/rp/reverserepo/all/results/lastTwoWeeks.json"

@@ -127,58 +127,75 @@ async def consumer_loop(queue: asyncio.Queue, classifier) -> None:
     """
     Reads items off the queue forever.
     Classifies each item and dispatches tradeable ones.
-    This is the hot path — keep it fast.
+
+    PERFORMANCE: DB writes and classification run in executor threads
+    so the queue drains as fast as possible. This is critical — with
+    100 sources emitting, the consumer must not block.
     """
     log.info("Consumer loop started")
-    while True:
-        item = await queue.get()   # Blocks until a source emits something
+    loop = asyncio.get_event_loop()
 
-        source   = item.get("source", "unknown")
-        text     = item.get("text", "")
-        ts       = item.get("ts", "")
-        extra    = item.get("extra_json")
+    # Reusable DB connection (WAL mode allows concurrent reads/writes)
+    _conn = db.get_connection()
 
-        # 1. Log every raw item to DB regardless of outcome
-        raw_id = db.log_raw_event(
-            source=source, ts=ts, raw_text=text, extra_json=extra
+    def _process_item(item):
+        """Run in thread pool — DB write + classify + update."""
+        source = item.get("source", "unknown")
+        text = item.get("text", "")
+        ts = item.get("ts", "")
+        extra = item.get("extra_json")
+
+        # 1. Log raw event to DB
+        cur = _conn.execute(
+            "INSERT INTO raw_events (ts, source, raw_text, extra_json) VALUES (?, ?, ?, ?)",
+            (ts, source, text, extra)
         )
+        raw_id = cur.lastrowid
+        _conn.commit()
 
         # 2. Classify
         try:
             result = classifier.classify(item)
         except Exception as exc:
-            log.warning("Classifier error on item from %s: %s", source, exc)
-            queue.task_done()
-            continue
+            log.warning("Classifier error on %s: %s", source, exc)
+            return raw_id, None
 
-        # 3. Update DB row with classification result
+        # 3. Update classification result
         if result.event_id != "NO_EVENT":
-            conn = db.get_connection()
-            conn.execute(
+            _conn.execute(
                 "UPDATE raw_events SET event_id=?, confidence=?, tradeable=? WHERE id=?",
                 (result.event_id, result.confidence, int(result.is_tradeable()), raw_id)
             )
-            conn.commit()
-            conn.close()
+            _conn.commit()
 
-        # 4. Feed to observation builder for RL state vector assembly
-        if obs_builder is not None:
+        return raw_id, result
+
+    while True:
+        item = await queue.get()
+
+        # Run DB + classification in thread pool — non-blocking
+        try:
+            raw_id, result = await loop.run_in_executor(None, _process_item, item)
+        except Exception as exc:
+            log.warning("Consumer error: %s", exc)
+            queue.task_done()
+            continue
+
+        # Feed to observation builder (fast, in-memory)
+        if obs_builder is not None and result is not None:
             enriched = dict(item)
             enriched["id"] = raw_id
             enriched["event_id"] = result.event_id
             enriched["confidence"] = result.confidence
-            enriched["raw_text"] = text
+            enriched["raw_text"] = item.get("text", "")
             obs_builder.ingest(enriched)
 
-        # 5. Dispatch if tradeable
-        if result.is_tradeable():
+        # Dispatch if tradeable
+        if result is not None and result.is_tradeable():
             try:
                 dispatch(result, raw_id)
             except Exception as exc:
                 log.warning("Dispatch error: %s", exc)
-        else:
-            log.debug("[%s] → %s (conf %.3f) — not tradeable",
-                      source, result.event_id, result.confidence)
 
         queue.task_done()
 
@@ -215,7 +232,7 @@ async def main() -> None:
     classifier = clf_real if clf_real else _StubClassifier()
 
     # 3. Shared queue — sources write, consumer reads
-    queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=10000)
 
     # 4. Read config from environment variables (or .env file)
     # Try to load .env if it exists
@@ -255,7 +272,27 @@ async def main() -> None:
         "ETHERSCAN_API_KEY": os.environ.get("ETHERSCAN_API_KEY", ""),
     }
 
-    # 5. Build and start all source tasks
+    # 5. Create shared TCP connection pool for all sources.
+    #    Individual sources still create their own ClientSession but they
+    #    all share one connector — eliminating TCP handshake overhead.
+    import aiohttp
+    shared_connector = aiohttp.TCPConnector(
+        limit=100,           # max simultaneous connections
+        limit_per_host=10,   # max per single host
+        ttl_dns_cache=300,   # DNS cache 5 min
+        enable_cleanup_closed=True,
+    )
+    # Monkey-patch aiohttp.ClientSession default connector
+    _orig_init = aiohttp.ClientSession.__init__
+    def _patched_init(self, *args, **kwargs):
+        if 'connector' not in kwargs:
+            kwargs['connector'] = shared_connector
+            kwargs['connector_owner'] = False  # don't close shared connector
+        _orig_init(self, *args, **kwargs)
+    aiohttp.ClientSession.__init__ = _patched_init
+    log.info("Shared TCP connector created (100 connections, 10/host)")
+
+    # 6a. Build and start all source tasks
     sources = src_module.build_sources(queue, config)
     source_tasks = [
         asyncio.create_task(source.run(), name=source.name)
