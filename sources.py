@@ -2321,25 +2321,63 @@ class FaaNasSource(BaseSource):
     interval_seconds = 60.0
 
     API_URL = "https://nasstatus.faa.gov/api/airport-status-information"
-    LEGACY_URL = "https://soa.smext.faa.gov/asws/api/airport/delays"
 
     async def poll(self) -> None:
         try:
             async with aiohttp.ClientSession() as session:
-                # Try primary first
-                for url in [self.API_URL, self.LEGACY_URL]:
-                    try:
-                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                            if resp.status != 200:
-                                continue
-                            data = await resp.json()
-                            break
-                    except Exception:
-                        continue
-                else:
+                async with session.get(self.API_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    text = await resp.text()
+
+                # FAA returns XML — parse it
+                import xml.etree.ElementTree as ET
+                try:
+                    root = ET.fromstring(text)
+                except ET.ParseError:
                     return
 
-                # Handle both API response formats
+                # Extract ground stops and delays
+                for delay_type in root.findall(".//Delay_type"):
+                    name_el = delay_type.find("Name")
+                    if name_el is None:
+                        continue
+                    delay_name = name_el.text or ""
+
+                    # Get affected airports
+                    for gs in delay_type.findall(".//Ground_Stop_List/Program") + delay_type.findall(".//Ground_Delay_List/Ground_Delay"):
+                        arpt = gs.find("ARPT")
+                        reason = gs.find("Reason")
+                        airport = arpt.text if arpt is not None else ""
+                        reason_text = reason.text if reason is not None else delay_name
+
+                        key = f"faa-{airport}-{delay_name}"
+                        if not airport or self._already_seen(key):
+                            continue
+
+                        await self.emit({
+                            "text": f"FAA: {airport} — {delay_name}: {reason_text}",
+                            "airport": airport,
+                            "delay_type": delay_name,
+                            "reason": reason_text,
+                            "extra_json": json.dumps({"airport": airport, "type": delay_name, "reason": reason_text}),
+                        })
+
+                # If no specific delays found, emit update time
+                update_el = root.find("Update_Time")
+                if update_el is not None:
+                    update_time = update_el.text or ""
+                    key = f"faa-update-{update_time}"
+                    if not self._already_seen(key):
+                        # Check if any delays exist
+                        delay_count = len(root.findall(".//Delay_type"))
+                        if delay_count > 0:
+                            await self.emit({
+                                "text": f"FAA NAS: {delay_count} delay programs active ({update_time})",
+                                "extra_json": json.dumps({"update": update_time, "delays": delay_count}),
+                            })
+
+                # Handle both API response formats (kept for legacy URL fallback)
                 delays = data if isinstance(data, list) else data.get("delays", data.get("data", []))
                 if isinstance(delays, dict):
                     delays = [delays]
