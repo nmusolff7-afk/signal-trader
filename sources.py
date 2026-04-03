@@ -837,9 +837,9 @@ class BlockchainComSource(BaseSource):
                         
                         value_btc = sum(o.get("value", 0) for o in tx.get("out", [])) / 1e8
 
-                        if value_btc > 1:  # >1 BTC transfers
+                        if value_btc >= 100:  # >100 BTC (~$4M+) whale transfers only
                             await self.emit({
-                                "text": f"Blockchain: Large BTC transfer {value_btc:.2f} BTC (~${value_btc*40000:.0f})",
+                                "text": f"Blockchain: Whale BTC transfer {value_btc:.2f} BTC (~${value_btc*67000:.0f})",
                                 "value_btc": value_btc,
                                 "tx_hash": tx_id,
                                 "extra_json": json.dumps({"value_btc": value_btc, "tx": tx_id})
@@ -1143,6 +1143,23 @@ class FdaMedwatchSource(BaseSource):
     RECALL_RSS = "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/recalls/rss.xml"
     ENFORCEMENT_API = "https://api.fda.gov/drug/enforcement.json?sort=report_date:desc&limit=5"
 
+    # Only emit recalls mentioning pharma/device companies or drug names — NOT food recalls
+    PHARMA_KEYWORDS = [
+        "pfizer", "moderna", "merck", "abbvie", "johnson", "lilly", "bristol",
+        "astrazeneca", "roche", "novartis", "amgen", "regeneron", "vertex",
+        "gilead", "biogen", "medtronic", "abbott", "stryker", "intuitive",
+        "boston scientific", "edwards", "zimmer", "becton", "baxter", "amneal",
+        "drug", "pharmaceutical", "injection", "tablet", "capsule", "medical device",
+        "implant", "catheter", "infusion", "vaccine", "insulin", "antibiotic",
+        "class i", "class ii recall", "fda approved", "nda", "bla", "pma",
+    ]
+    FOOD_NOISE = [
+        "milk", "cheese", "chocolate", "garlic", "salad", "lettuce", "spinach",
+        "chicken", "beef", "pork", "turkey", "fish", "shrimp", "egg",
+        "peanut", "almond", "cashew", "bread", "flour", "cereal", "cookie",
+        "ice cream", "candy", "snack", "supplement", "vitamin", "herb",
+    ]
+
     async def poll(self) -> None:
         # ── RSS feed for recalls/safety alerts ──
         try:
@@ -1159,6 +1176,17 @@ class FdaMedwatchSource(BaseSource):
                 title = entry.get("title", "")
                 summary = entry.get("summary", "")
                 text = f"{title}. {summary}".strip()
+                text_lower = text.lower()
+
+                # Filter: skip food recalls (no trading relevance)
+                if any(food in text_lower for food in self.FOOD_NOISE):
+                    if not any(pharma in text_lower for pharma in self.PHARMA_KEYWORDS):
+                        continue
+
+                # Only emit if pharma/device related
+                is_pharma = any(kw in text_lower for kw in self.PHARMA_KEYWORDS)
+                if not is_pharma:
+                    continue
 
                 await self.emit({
                     "text": f"FDA Recall: {text[:200]}",
@@ -2942,12 +2970,17 @@ class CongressSource(BaseSource):
                 async with session.get(self.BILLS_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
+                        current_year = str(datetime.datetime.utcnow().year)
                         for bill in data.get("bills", [])[:10]:
                             bill_num = bill.get("number", "")
                             bill_type = bill.get("type", "")
                             title = bill.get("title", "")[:150]
                             action = bill.get("latestAction", {}).get("text", "")[:100]
                             update = bill.get("updateDate", "")
+
+                            # Reject old bills — only current year
+                            if update and current_year not in update[:4]:
+                                continue
 
                             key = f"congress-{bill_type}{bill_num}-{update}"
                             if self._already_seen(key):
@@ -5957,13 +5990,13 @@ class UsaSpendingSource(BaseSource):
     async def poll(self) -> None:
         try:
             now = datetime.datetime.utcnow()
-            week_ago = (now - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+            three_days_ago = (now - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
 
             payload = {
                 "filters": {
-                    "time_period": [{"start_date": week_ago, "end_date": now.strftime("%Y-%m-%d")}],
+                    "time_period": [{"start_date": three_days_ago, "end_date": now.strftime("%Y-%m-%d")}],
                     "award_type_codes": ["A", "B", "C", "D"],
-                    "award_amounts": [{"lower_bound": 10000000}],
+                    "award_amounts": [{"lower_bound": 50000000}],  # $50M+ only (was $10M, caught baseline contracts)
                 },
                 "fields": ["Award ID", "Recipient Name", "Award Amount", "Description", "Awarding Agency", "Start Date"],
                 "limit": 10,
@@ -6061,12 +6094,19 @@ class CdcWastewaterSource(BaseSource):
                         return
                     data = await resp.json()
 
+            # Only accept data from the last 60 days
+            cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=60)).strftime("%Y-%m-%d")
+
             for record in (data if isinstance(data, list) else []):
                 state = record.get("wwtp_jurisdiction", record.get("state", ""))
                 date_end = record.get("date_end", "")
                 activity = record.get("activity_level", record.get("ptc_15d", ""))
                 trend = record.get("detect_prop_15d", record.get("trend", ""))
                 pathogen = record.get("pathogen", "SARS-CoV-2")
+
+                # Reject stale data (Sept 2025 appearing in April 2026 = broken)
+                if date_end and date_end < cutoff:
+                    continue
 
                 key = f"cdc-ww-{state}-{date_end}-{pathogen}"
                 if not state or self._already_seen(key):
