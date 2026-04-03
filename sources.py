@@ -190,7 +190,7 @@ class OpecRssSource(BaseSource):
     FREE. No key required.
     """
     name = "OPEC RSS"
-    interval_seconds = 30.0   # Poll every 30s — OPEC announcements are time-sensitive
+    interval_seconds = 86400.0   # Blocked — daily poll to avoid wasted requests
 
     RSS_URL = "https://www.opec.org/opec_web/en/press_room/204.htm"
 
@@ -778,9 +778,9 @@ class BlockchainComSource(BaseSource):
                         if self._already_seen(tx_id):
                             continue
                         
-                        value_btc = tx.get("out", [{}])[0].get("value", 0) / 1e8
-                        
-                        if value_btc > 5:  # >5 BTC transfers
+                        value_btc = sum(o.get("value", 0) for o in tx.get("out", [])) / 1e8
+
+                        if value_btc > 1:  # >1 BTC transfers
                             await self.emit({
                                 "text": f"Blockchain: Large BTC transfer {value_btc:.2f} BTC (~${value_btc*40000:.0f})",
                                 "value_btc": value_btc,
@@ -1845,7 +1845,7 @@ class FercEnergySource(BaseSource):
     FREE. No API key required.
     """
     name = "FERC Energy"
-    interval_seconds = 300.0  # every 10 min
+    interval_seconds = 86400.0  # Blocked — daily poll to avoid wasted requests
 
     RSS_URL = "https://www.ferc.gov/rss/newsroom/ferc-news.rss"
 
@@ -2435,7 +2435,7 @@ class WhoOutbreakSource(BaseSource):
     async def poll(self) -> None:
         try:
             async with aiohttp.ClientSession() as session:
-                params = {"$orderby": "PublicationDate desc", "$top": "10"}
+                params = {"orderby": "PublicationDate desc", "top": "10"}
                 async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status != 200:
                         return
@@ -2642,7 +2642,7 @@ class MempoolSource(BaseSource):
 class GdeltDocSource(BaseSource):
     """GDELT DOC 2.0 — global event sentiment monitoring. No auth."""
     name = "GDELT"
-    interval_seconds = 300.0  # every 15 min
+    interval_seconds = 30.0  # short interval, but sleeps between queries to avoid 429
 
     API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 
@@ -2656,7 +2656,9 @@ class GdeltDocSource(BaseSource):
     async def poll(self) -> None:
         try:
             async with aiohttp.ClientSession() as session:
-                for query, category in self.QUERIES:
+                for qi, (query, category) in enumerate(self.QUERIES):
+                    if qi > 0:
+                        await asyncio.sleep(5)  # 5s between keyword queries to avoid 429
                     params = {
                         "query": query,
                         "mode": "artlist",
@@ -3350,7 +3352,7 @@ class OfacSanctionsSource(BaseSource):
 class CaisoSource(BaseSource):
     """CAISO California grid — 5-min LMPs as nat gas demand proxy. No auth."""
     name = "CAISO"
-    interval_seconds = 120.0
+    interval_seconds = 86400.0  # Blocked — daily poll to avoid wasted requests
 
     # Primary: CAISO Today's Outlook API
     OUTLOOK_URL = "https://www.caiso.com/api/TodaysOutlook/GetFuelTypeData"
@@ -3975,7 +3977,7 @@ class EurostatSource(BaseSource):
         try:
             async with aiohttp.ClientSession() as session:
                 for dataset, label in self.DATASETS.items():
-                    url = f"{self.API_URL}/{dataset}?format=JSON&lang=en&geo=EA20&startPeriod=2025-01"
+                    url = f"{self.API_URL}/{dataset}?format=JSON&lang=en&geo=EA20"
                     try:
                         async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                             if resp.status != 200:
@@ -4227,7 +4229,7 @@ class CensusEitsSource(BaseSource):
                     params = {
                         "get": "cell_value,time_slot_name,category_code",
                         "key": self.api_key,
-                        "time": "from+2025",
+                        "time": "from 2025",
                     }
                     try:
                         async with session.get(info["url"], params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
@@ -4392,7 +4394,7 @@ class NasaEonetSource(BaseSource):
 class ReliefWebSource(BaseSource):
     """ReliefWeb — UN-curated conflict and disaster intelligence. No auth."""
     name = "ReliefWeb"
-    interval_seconds = 300.0
+    interval_seconds = 86400.0  # Blocked — daily poll to avoid wasted requests
 
     API_URL = "https://api.reliefweb.int/v2/reports"
 
@@ -4623,7 +4625,11 @@ class UkCarbonSource(BaseSource):
                         return
                     data = await resp.json()
 
-                gen_mix = data.get("data", {}).get("generationmix", [])
+                data_block = data.get("data", {})
+                # API may return {"data": {"generationmix": [...]}} or {"data": [{"generationmix": [...]}]}
+                if isinstance(data_block, list) and data_block:
+                    data_block = data_block[0]
+                gen_mix = data_block.get("generationmix", []) if isinstance(data_block, dict) else []
                 if not gen_mix:
                     return
 
@@ -5034,7 +5040,7 @@ class AcledSource(BaseSource):
 class CnnFearGreedSource(BaseSource):
     """CNN Fear & Greed — 7-component equity sentiment (0-100). No auth."""
     name = "CNN Fear&Greed"
-    interval_seconds = 300.0
+    interval_seconds = 86400.0  # Blocked — daily poll to avoid wasted requests
     seen_ttl = 300
 
     async def poll(self) -> None:
@@ -5086,7 +5092,7 @@ class StockTwitsSource(BaseSource):
                 for ticker in self.TICKERS:
                     url = f"{self.API_URL}/{ticker}.json"
                     try:
-                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                             if resp.status != 200:
                                 continue
                             data = await resp.json()
@@ -5155,7 +5161,7 @@ class FourChanBizSource(BaseSource):
                     text_combined = f"{sub} {com}"
 
                     # Only emit threads with market keywords and decent engagement
-                    if replies < 10:
+                    if replies < 5:
                         continue
                     if not any(kw in text_combined for kw in self.MARKET_KEYWORDS):
                         continue
@@ -5335,7 +5341,7 @@ class KalshiSource(BaseSource):
 class MetaculusSource(BaseSource):
     """Metaculus — calibrated crowd forecasts on geopolitics/economics. No auth."""
     name = "Metaculus"
-    interval_seconds = 600.0
+    interval_seconds = 86400.0  # Blocked — daily poll to avoid wasted requests
 
     API_URL = "https://www.metaculus.com/api2/questions/"
 
@@ -6249,7 +6255,7 @@ class OddsApiSource(BaseSource):
 class NasdaqDataLinkSource(BaseSource):
     """Nasdaq Data Link CHRIS — daily commodity futures settlements. Free key."""
     name = "Nasdaq CHRIS"
-    interval_seconds = 1800.0  # daily data
+    interval_seconds = 86400.0  # Blocked — daily poll to avoid wasted requests
 
     API_URL = "https://data.nasdaq.com/api/v3/datasets/CHRIS"
 
