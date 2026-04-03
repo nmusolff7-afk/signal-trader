@@ -143,6 +143,29 @@ async def consumer_loop(queue: asyncio.Queue, classifier) -> None:
         source = item.get("source", "unknown")
         text = item.get("text", "")
         ts = item.get("ts", "")
+
+        # ── Freshness filter: reject stale data ──────────────────────────
+        # If the event text contains a date/year that's >6 months old, skip it.
+        # This catches RSS archive re-ingestion (BoE 2025 speeches, CBOE 2019 data, etc.)
+        import re as _re
+        stale = False
+        year_matches = _re.findall(r'\b(20\d{2})\b', text)
+        if year_matches:
+            import datetime as _dt
+            current_year = _dt.datetime.utcnow().year
+            current_month = _dt.datetime.utcnow().month
+            for y in year_matches:
+                yr = int(y)
+                if yr < current_year - 1:  # more than 1 year old
+                    stale = True
+                    break
+                if yr == current_year - 1 and current_month > 6:  # >6 months ago
+                    stale = True
+                    break
+
+        if stale:
+            queue.task_done()
+            continue
         extra = item.get("extra_json")
 
         # 1. Write to DB (single persistent connection)

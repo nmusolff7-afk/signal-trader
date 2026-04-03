@@ -37,38 +37,37 @@ class BaseSource(ABC):
     """
     Abstract base for every data source.
     Subclasses implement poll() and set name + interval_seconds.
+
+    DEDUP RULES (fixing the core data quality problem):
+    - _already_seen(key) returns True if the EXACT key was seen before.
+    - Keys NEVER expire. Same data = same key = never re-emitted.
+    - This is correct: the RL model needs ONE signal per value change,
+      not 80 copies of "funding rate = -50.8%" every minute.
+    - For RSS feeds: key = article URL/ID (naturally unique per item)
+    - For numeric data: key = rounded value (emits on meaningful change)
+    - Price feed (KrakenPrice): uses special logic — emits on price change
     """
     name: str = "Unknown"
-    interval_seconds: float = 60.0   # How often to check for new data
+    interval_seconds: float = 60.0
 
-    # Dedup: only suppress truly identical content within this window.
-    # After TTL expires, the SAME content will re-emit (this is correct —
-    # the RL model needs periodic state updates even if data hasn't changed).
-    seen_ttl: float = 300.0   # 5 min default
+    # REMOVED: always_emit and seen_ttl — these caused the noise flooding.
+    # Dedup is now permanent per key. Sources that need to re-emit
+    # should construct keys that include the changing value.
 
-    # Set True on sources that should emit every poll regardless of content.
-    # Use for price feeds, funding rates, and other continuous data.
-    always_emit: bool = False
-
-    # Shared HTTP session — set by main.py at startup, reused by all sources.
-    # Eliminates thousands of TCP handshakes per minute.
     _shared_session: 'aiohttp.ClientSession | None' = None
 
     def __init__(self, queue: asyncio.Queue):
         self.queue = queue
-        self._seen: dict[str, float] = {}
+        self._seen: set[str] = set()
         self._poll_count = 0
 
     @classmethod
     def set_shared_session(cls, session: 'aiohttp.ClientSession') -> None:
-        """Set a shared aiohttp session for all sources. Call once at startup."""
         cls._shared_session = session
 
     def get_session(self) -> 'aiohttp.ClientSession':
-        """Get the shared session, or create a temporary one if not set."""
         if self._shared_session is not None:
             return self._shared_session
-        # Fallback: create per-source session (not ideal but works)
         return aiohttp.ClientSession()
 
     def _now(self) -> str:
@@ -76,27 +75,23 @@ class BaseSource(ABC):
 
     def _already_seen(self, key: str) -> bool:
         """
-        Dedup with TTL expiry. Returns True if this EXACT key was seen
-        within the last seen_ttl seconds. After TTL, allows re-emit.
+        Permanent dedup. Once a key is seen, it's never emitted again.
+        This is correct for: RSS articles, filing IDs, unique events.
 
-        For always_emit sources, this always returns False.
+        For numeric data that changes: include the VALUE in the key
+        so a new value = new key = new emission. Example:
+          key = f"kraken-BTC-{price:.0f}"  → emits on $1 change
+          key = f"funding-BTC-{rate:.4f}"  → emits on 0.01% change
         """
-        if self.always_emit:
-            return False
-
-        import time as _time
-        now = _time.time()
-
-        # Expire old entries periodically
-        if len(self._seen) > 300:
-            cutoff = now - self.seen_ttl
-            self._seen = {k: v for k, v in self._seen.items() if v > cutoff}
-
         if key in self._seen:
-            if now - self._seen[key] < self.seen_ttl:
-                return True
-            # Expired — re-emit allowed
-        self._seen[key] = now
+            return True
+        self._seen.add(key)
+        # Trim to prevent unbounded growth — keep last 2000
+        if len(self._seen) > 2000:
+            # Remove oldest (sets are unordered, but this prevents OOM)
+            excess = len(self._seen) - 1500
+            for _ in range(excess):
+                self._seen.pop()
         return False
 
     async def emit(self, item: dict) -> None:
@@ -106,23 +101,18 @@ class BaseSource(ABC):
         try:
             self.queue.put_nowait(item)
         except asyncio.QueueFull:
-            # Drop oldest items if queue is full — don't block the source
             try:
                 self.queue.get_nowait()
                 self.queue.put_nowait(item)
             except asyncio.QueueEmpty:
                 pass
-        log.debug("[%s] emitted: %s", self.name, item.get("text", "")[:60])
 
     @abstractmethod
     async def poll(self) -> None:
-        """Fetch data and call await self.emit(item) for each new item found."""
         ...
 
     async def run(self) -> None:
-        """Main loop. Polls forever, sleeping interval_seconds between calls."""
         log.info("[%s] source started (interval: %ss)", self.name, self.interval_seconds)
-        # Small stagger (0-3s) so sources don't all fire at the exact same instant
         import random
         await asyncio.sleep(random.uniform(0, min(3, self.interval_seconds)))
         while True:
@@ -681,8 +671,6 @@ class KrakenFundingRateSource(BaseSource):
     """
     name = "Kraken Funding"
     interval_seconds = 5.0
-    always_emit = True
-    seen_ttl = 30
 
     # Kraken perp symbol → human label
     SYMBOLS = {
@@ -750,8 +738,6 @@ class OkxFundingRateSource(BaseSource):
     """OKX perpetuals funding rates"""
     name = "OKX Funding"
     interval_seconds = 5.0
-    always_emit = True
-    seen_ttl = 30
     
     def __init__(self, queue: asyncio.Queue):
         super().__init__(queue)
@@ -799,8 +785,6 @@ class BlockchainComSource(BaseSource):
     """Monitor large BTC transfers in real-time"""
     name = "Blockchain.com"
     interval_seconds = 10.0
-    always_emit = True
-    seen_ttl = 60
     
     async def poll(self) -> None:
         try:
@@ -854,7 +838,6 @@ class EtherscanSource(BaseSource):
     """
     name = "Etherscan"
     interval_seconds = 10.0
-    always_emit = True
 
     ETHERSCAN_API_URL = "https://api.etherscan.io/api"
 
@@ -942,8 +925,7 @@ class CoinGeckoSource(BaseSource):
       - E090: Network transaction volume surge
     """
     name = "CoinGecko"
-    interval_seconds = 60.0
-    always_emit = True  # Every 5 minutes
+    interval_seconds = 60.0  # Every 5 minutes
 
     COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
 
@@ -1455,9 +1437,7 @@ class KrakenPriceSource(BaseSource):
     FREE. No API key required.
     """
     name = "Kraken Price"
-    interval_seconds = 5.0
-    always_emit = True
-    seen_ttl = 0  # never dedup — always emit
+    interval_seconds = 5.0  # never dedup — always emit
 
     TICKER_URL = "https://api.kraken.com/0/public/Ticker"
     PAIRS = {
@@ -1496,6 +1476,11 @@ class KrakenPriceSource(BaseSource):
                         low = float(ticker["l"][1])    # 24h low
                         volume = float(ticker["v"][1]) # 24h volume
 
+                        # Only emit on meaningful price change ($10 BTC, $2 ETH)
+                        last = self._last_prices.get(label)
+                        min_change = 10.0 if label == "BTC" else 2.0
+                        if last is not None and abs(price - last) < min_change:
+                            continue
                         self._last_prices[label] = price
 
                         change_pct = ((price - open_price) / open_price) * 100 if open_price else 0
@@ -1536,11 +1521,10 @@ class UsgsEarthquakeSource(BaseSource):
     """
     name = "USGS Earthquake"
     interval_seconds = 30.0
-    always_emit = True
 
     FEED_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_hour.geojson"
     # Fallback to larger window if hourly is empty
-    FEED_DAY_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson"
+    FEED_DAY_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_day.geojson"
 
     # Oil-producing regions (lat/lon bounding boxes)
     OIL_REGIONS = {
@@ -1655,6 +1639,10 @@ class TreasuryAuctionSource(BaseSource):
                     sec_term = record.get("security_term", "")
                     high_yield = record.get("high_yield", "")
                     btc_ratio = record.get("bid_to_cover_ratio", "")
+
+                    # Suppress null/empty yield rows — not a signal
+                    if not high_yield or high_yield in ("null", "None", ""):
+                        continue
 
                     key = f"auction-{auction_date}-{sec_type}-{sec_term}"
                     if self._already_seen(key):
@@ -1777,8 +1765,7 @@ class NwsSevereWeatherSource(BaseSource):
     FREE. No API key required.
     """
     name = "NWS Weather"
-    interval_seconds = 120.0
-    always_emit = True  # every 5 min
+    interval_seconds = 120.0  # every 5 min
 
     ALERTS_URL = "https://api.weather.gov/alerts/active"
 
@@ -2031,9 +2018,7 @@ class PolymarketSource(BaseSource):
     FREE. No API key required for reads.
     """
     name = "Polymarket"
-    interval_seconds = 30.0
-    always_emit = True
-    seen_ttl = 60  # every 1 min
+    interval_seconds = 30.0  # every 1 min
 
     API_URL = "https://gamma-api.polymarket.com/markets"
 
@@ -2601,8 +2586,6 @@ class DydxSource(BaseSource):
     """dYdX v4 perpetual markets — funding, OI, volume. No auth."""
     name = "dYdX"
     interval_seconds = 30.0
-    always_emit = True
-    seen_ttl = 30
 
     MARKETS_URL = "https://indexer.dydx.trade/v4/perpetualMarkets"
 
@@ -2666,8 +2649,6 @@ class MempoolSource(BaseSource):
     """Bitcoin mempool fees + difficulty adjustment. No auth."""
     name = "Mempool"
     interval_seconds = 15.0
-    always_emit = True
-    seen_ttl = 15
 
     FEES_URL = "https://mempool.space/api/v1/fees/recommended"
     DIFF_URL = "https://mempool.space/api/v1/difficulty-adjustment"
@@ -3121,7 +3102,6 @@ class OpenSkySource(BaseSource):
     """
     name = "OpenSky"
     interval_seconds = 15.0
-    always_emit = True
 
     API_URL = "https://opensky-network.org/api/states/all"
 
@@ -3671,7 +3651,6 @@ class CboePcRatioSource(BaseSource):
     """CBOE equity put/call ratio — contrarian sentiment. No auth."""
     name = "CBOE P/C"
     interval_seconds = 1800.0
-    always_emit = True
 
     EQUITY_URL = "https://cdn.cboe.com/resources/options/volume_and_call_put_ratios/equitypc.csv"
 
@@ -3728,7 +3707,6 @@ class DefiLlamaSource(BaseSource):
     """DeFi Llama — TVL + stablecoin supply + DEX volume. No auth."""
     name = "DeFi Llama"
     interval_seconds = 600.0
-    always_emit = True
 
     STABLECOIN_URL = "https://stablecoins.llama.fi/stablecoins?includePrices=true"
     TVL_URL = "https://api.llama.fi/v2/historicalChainTvl"
@@ -3787,8 +3765,6 @@ class HyperliquidSource(BaseSource):
     """Hyperliquid DEX — perpetual funding/OI/volume. No auth."""
     name = "Hyperliquid"
     interval_seconds = 30.0
-    always_emit = True
-    seen_ttl = 30
 
     API_URL = "https://api.hyperliquid.xyz/info"
     TRACKED = {"BTC", "ETH", "SOL"}
@@ -3985,7 +3961,6 @@ class NoaaCoopsSource(BaseSource):
     """NOAA CO-OPS water levels at key ports. No auth."""
     name = "NOAA Ports"
     interval_seconds = 300.0
-    always_emit = True
 
     API_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 
@@ -4564,7 +4539,6 @@ class NoaaBuoySource(BaseSource):
     """NOAA NDBC ocean buoys — wind, waves, pressure at key locations. No auth."""
     name = "NOAA Buoys"
     interval_seconds = 900.0
-    always_emit = True
 
     STATIONS = {
         "42001": "Gulf of Mexico Central",
@@ -5133,7 +5107,6 @@ class CnnFearGreedSource(BaseSource):
     """CNN Fear & Greed — 7-component equity sentiment (0-100). No auth."""
     name = "CNN Fear&Greed"
     interval_seconds = 86400.0  # Blocked — daily poll to avoid wasted requests
-    seen_ttl = 300
 
     async def poll(self) -> None:
         try:
@@ -5173,8 +5146,6 @@ class StockTwitsSource(BaseSource):
     """StockTwits — pre-labeled bull/bear messages per ticker. No auth."""
     name = "StockTwits"
     interval_seconds = 60.0
-    always_emit = True
-    seen_ttl = 120
 
     API_URL = "https://api.stocktwits.com/api/2/streams/symbol"
     TICKERS = ["SPY", "QQQ", "AAPL", "TSLA", "NVDA", "BTC.X", "ETH.X"]
@@ -5226,7 +5197,6 @@ class FourChanBizSource(BaseSource):
     """4chan /biz/ — anonymous crypto/retail sentiment. No auth."""
     name = "4chan /biz/"
     interval_seconds = 120.0
-    seen_ttl = 120
 
     CATALOG_URL = "https://a.4cdn.org/biz/catalog.json"
 
@@ -5283,7 +5253,6 @@ class CryptoFearGreedSource(BaseSource):
     """Alternative.me Crypto Fear & Greed — daily BTC sentiment. No auth."""
     name = "Crypto F&G"
     interval_seconds = 1800.0
-    always_emit = True
 
     API_URL = "https://api.alternative.me/fng/?limit=1"
 
@@ -5381,13 +5350,18 @@ class KalshiSource(BaseSource):
     """Kalshi — real-money regulated event contracts (CPI, GDP, Fed, weather). No auth."""
     name = "Kalshi"
     interval_seconds = 60.0
-    always_emit = True
-    seen_ttl = 60
 
     API_URL = "https://api.elections.kalshi.com/trade-api/v2/markets"
 
     TRACKED_KEYWORDS = ["fed", "cpi", "inflation", "gdp", "recession", "unemployment",
-                        "rate", "bitcoin", "oil", "hurricane", "shutdown"]
+                        "rate", "bitcoin", "oil", "hurricane", "shutdown", "tariff",
+                        "war", "iran", "china", "default", "debt ceiling"]
+
+    # Filter OUT sports/entertainment noise
+    EXCLUDE_KEYWORDS = ["nfl", "nba", "nhl", "mlb", "soccer", "football", "baseball",
+                        "basketball", "hockey", "panthers", "sabres", "hurricanes",
+                        "lakers", "celtics", "warriors", "super bowl", "playoff",
+                        "oscar", "grammy", "emmy", "bachelor"]
 
     async def poll(self) -> None:
         try:
@@ -5409,8 +5383,18 @@ class KalshiSource(BaseSource):
                     continue
 
                 t_lower = title.lower()
+
+                # Filter out sports/entertainment noise
+                if any(ex in t_lower for ex in self.EXCLUDE_KEYWORDS):
+                    continue
+
+                # Only keep macro/financial markets
                 relevant = any(kw in t_lower for kw in self.TRACKED_KEYWORDS)
                 if not relevant:
+                    continue
+
+                # Skip zero-volume markets
+                if volume is not None and int(volume or 0) == 0:
                     continue
 
                 key = f"kalshi-{ticker}-{yes_price}"
@@ -5498,7 +5482,6 @@ class PredictItSource(BaseSource):
     """PredictIt — US political market prices. No auth."""
     name = "PredictIt"
     interval_seconds = 120.0
-    always_emit = True
 
     API_URL = "https://www.predictit.org/api/marketdata/all/"
 
@@ -5548,8 +5531,6 @@ class ManifoldSource(BaseSource):
     """Manifold Markets — prediction markets on breaking events. No auth."""
     name = "Manifold"
     interval_seconds = 60.0
-    always_emit = True
-    seen_ttl = 60
 
     API_URL = "https://api.manifold.markets/v0/markets"
 
@@ -5603,8 +5584,6 @@ class FinnhubSource(BaseSource):
     """Finnhub — news sentiment + social sentiment + insider MSPR. Free key."""
     name = "Finnhub"
     interval_seconds = 120.0
-    always_emit = True
-    seen_ttl = 120
 
     BASE_URL = "https://finnhub.io/api/v1"
     TICKERS = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN"]
@@ -5833,7 +5812,6 @@ class NyFedRatesSource(BaseSource):
     """NY Fed Markets — SOFR, EFFR, OBFR, repo ops. No auth."""
     name = "NY Fed Rates"
     interval_seconds = 300.0
-    always_emit = True
 
     RATES_URL = "https://markets.newyorkfed.org/api/rates/all/latest.json"
     RRP_URL = "https://markets.newyorkfed.org/api/rp/reverserepo/all/results/lastTwoWeeks.json"
