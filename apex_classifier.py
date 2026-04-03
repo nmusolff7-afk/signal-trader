@@ -1699,6 +1699,18 @@ SOURCE_METHOD_MAP = {
     "NewsAPI.ai":           "fed",
     "MarketAux":            "edgar",
     "Currents API":         "fed",
+    # Money markets
+    "NY Fed Rates":         "fed",
+    # Government procurement
+    "USASpending":          "fed",
+    # Nuclear / geopolitical
+    "IAEA":                 "noaa",
+    # Health
+    "CDC Wastewater":       "noaa",
+    # Satellite
+    "NASA POWER":           "noaa",
+    # Labor
+    "FMCS Labor":           "fed",
 }
 
 # Sources where keyword will often fail — send to transformer

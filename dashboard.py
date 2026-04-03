@@ -84,6 +84,7 @@ ALL_SOURCES = [
     "CNN Fear&Greed", "Crypto F&G", "SentiCrypt", "StockTwits", "4chan /biz/",
     "Kalshi", "Metaculus", "PredictIt", "Manifold",
     "Finnhub", "NewsAPI.ai", "MarketAux", "Currents API",
+    "NY Fed Rates", "USASpending", "IAEA", "CDC Wastewater", "NASA POWER", "FMCS Labor",
 ]
 
 # ── API keys we expect ───────────────────────────────────────────────────────

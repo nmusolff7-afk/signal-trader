@@ -5669,6 +5669,335 @@ class CurrentsApiSource(BaseSource):
             log.warning("[Currents API] Error: %s", e)
 
 
+
+
+# ═══════════════════════════════════════════════════════
+# NY FED MARKETS API — SOFR/EFFR/repo rates
+# No auth. The definitive overnight funding rate complex.
+# ═══════════════════════════════════════════════════════
+
+class NyFedRatesSource(BaseSource):
+    """NY Fed Markets — SOFR, EFFR, OBFR, repo ops. No auth."""
+    name = "NY Fed Rates"
+    interval_seconds = 300.0
+
+    RATES_URL = "https://markets.newyorkfed.org/api/rates/all/latest.json"
+    RRP_URL = "https://markets.newyorkfed.org/api/rp/reverserepo/all/results/lastTwoWeeks.json"
+
+    async def poll(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                # All overnight rates
+                async with session.get(self.RATES_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+                rates = data.get("refRates", data.get("rates", []))
+                if isinstance(rates, list):
+                    for r in rates:
+                        rate_type = r.get("type", "")
+                        rate_val = r.get("percentRate", r.get("rate", ""))
+                        eff_date = r.get("effectiveDate", "")
+                        volume = r.get("volumeInBillions", "")
+
+                        key = f"nyfed-{rate_type}-{eff_date}-{rate_val}"
+                        if not rate_type or self._already_seen(key):
+                            continue
+
+                        vol_text = f", vol ${volume}B" if volume else ""
+                        await self.emit({
+                            "text": f"NY Fed: {rate_type} = {rate_val}%{vol_text} ({eff_date})",
+                            "rate_type": rate_type, "rate": rate_val, "volume": volume,
+                            "extra_json": json.dumps({"type": rate_type, "rate": rate_val, "date": eff_date}),
+                        })
+
+                # RRP facility usage
+                async with session.get(self.RRP_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        rrp_data = await resp.json()
+                        ops = rrp_data.get("repo", {}).get("operations", [])
+                        if ops:
+                            latest = ops[0]
+                            total = latest.get("totalAmtAccepted", 0)
+                            date = latest.get("operationDate", "")
+                            key = f"nyfed-rrp-{date}-{total}"
+                            if not self._already_seen(key):
+                                total_b = float(total) / 1e9 if total else 0
+                                alert = " [LOW — collateral stress]" if total_b < 200 else ""
+                                await self.emit({
+                                    "text": f"NY Fed: RRP facility ${total_b:,.0f}B ({date}){alert}",
+                                    "rrp_billions": total_b,
+                                    "extra_json": json.dumps({"rrp": total_b, "date": date}),
+                                })
+        except Exception as e:
+            log.warning("[NY Fed Rates] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# USASPENDING.GOV — federal contract awards
+# No auth. DoD, NASA, DHS contracts with full details.
+# ═══════════════════════════════════════════════════════
+
+class UsaSpendingSource(BaseSource):
+    """USASpending — federal contract awards (DoD, NASA, DHS). No auth."""
+    name = "USASpending"
+    interval_seconds = 1800.0
+
+    API_URL = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
+
+    async def poll(self) -> None:
+        try:
+            now = datetime.datetime.utcnow()
+            week_ago = (now - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+
+            payload = {
+                "filters": {
+                    "time_period": [{"start_date": week_ago, "end_date": now.strftime("%Y-%m-%d")}],
+                    "award_type_codes": ["A", "B", "C", "D"],
+                    "award_amounts": [{"lower_bound": 10000000}],
+                },
+                "fields": ["Award ID", "Recipient Name", "Award Amount", "Description", "Awarding Agency", "Start Date"],
+                "limit": 10,
+                "order": "desc",
+                "sort": "Award Amount",
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            results = data.get("results", [])
+            for award in results:
+                aid = award.get("Award ID", "")
+                if not aid or self._already_seen(aid):
+                    continue
+
+                recipient = award.get("Recipient Name", "")
+                amount = award.get("Award Amount", 0)
+                agency = award.get("Awarding Agency", "")
+                desc = award.get("Description", "")[:100]
+
+                try:
+                    amt_m = float(amount) / 1e6
+                except (ValueError, TypeError):
+                    amt_m = 0
+
+                await self.emit({
+                    "text": f"USASpending: ${amt_m:,.0f}M to {recipient} ({agency}) — {desc}",
+                    "recipient": recipient, "amount": amount, "agency": agency,
+                    "extra_json": json.dumps({"id": aid, "recipient": recipient, "amount": amount, "agency": agency}),
+                })
+        except Exception as e:
+            log.warning("[USASpending] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# IAEA RSS — nuclear geopolitical intelligence
+# No auth. Iran enrichment, reactor incidents, DG statements.
+# ═══════════════════════════════════════════════════════
+
+class IaeaSource(BaseSource):
+    """IAEA — nuclear weapons inspections, reactor incidents, DG statements. No auth."""
+    name = "IAEA"
+    interval_seconds = 300.0
+
+    FEEDS = {
+        "dg_statements": "https://www.iaea.org/feeds/dgstatements",
+        "top_news": "https://www.iaea.org/feeds/topnews",
+    }
+
+    async def poll(self) -> None:
+        loop = asyncio.get_event_loop()
+        for feed_name, url in self.FEEDS.items():
+            try:
+                feed = await loop.run_in_executor(None, feedparser.parse, url)
+                for entry in feed.entries[:10]:
+                    uid = entry.get("id") or entry.get("link", "")
+                    if self._already_seen(uid):
+                        continue
+                    title = entry.get("title", "")
+                    priority = "URGENT" if feed_name == "dg_statements" else "normal"
+                    await self.emit({
+                        "text": f"IAEA [{priority}]: {title}",
+                        "title": title, "priority": priority, "feed": feed_name,
+                        "link": entry.get("link", ""),
+                        "extra_json": json.dumps({"uid": uid, "feed": feed_name, "priority": priority}),
+                    })
+            except Exception as e:
+                log.warning("[IAEA] %s error: %s", feed_name, e)
+
+
+# ═══════════════════════════════════════════════════════
+# CDC WASTEWATER SURVEILLANCE (NWSS)
+# No auth (Socrata). Detects outbreaks 1-2 weeks early.
+# ═══════════════════════════════════════════════════════
+
+class CdcWastewaterSource(BaseSource):
+    """CDC NWSS wastewater surveillance — early outbreak detection. No auth."""
+    name = "CDC Wastewater"
+    interval_seconds = 3600.0  # weekly data, hourly poll
+
+    API_URL = "https://data.cdc.gov/resource/2ew6-ywp6.json"
+
+    async def poll(self) -> None:
+        try:
+            params = {"$limit": "20", "$order": "date_end DESC"}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            for record in (data if isinstance(data, list) else []):
+                state = record.get("wwtp_jurisdiction", record.get("state", ""))
+                date_end = record.get("date_end", "")
+                activity = record.get("activity_level", record.get("ptc_15d", ""))
+                trend = record.get("detect_prop_15d", record.get("trend", ""))
+                pathogen = record.get("pathogen", "SARS-CoV-2")
+
+                key = f"cdc-ww-{state}-{date_end}-{pathogen}"
+                if not state or self._already_seen(key):
+                    continue
+
+                alert = ""
+                if isinstance(trend, str) and "increasing" in trend.lower():
+                    alert = " [INCREASING]"
+
+                await self.emit({
+                    "text": f"CDC Wastewater: {state} {pathogen} activity={activity} trend={trend}{alert} ({date_end})",
+                    "state": state, "pathogen": pathogen, "activity": activity, "trend": trend,
+                    "extra_json": json.dumps({"state": state, "pathogen": pathogen, "activity": activity, "date": date_end}),
+                })
+        except Exception as e:
+            log.warning("[CDC Wastewater] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# NASA POWER — satellite-derived energy/agriculture data
+# No auth. Solar irradiance, wind speed, temperature globally.
+# ═══════════════════════════════════════════════════════
+
+class NasaPowerSource(BaseSource):
+    """NASA POWER — satellite solar/wind/temp data for energy prediction. No auth."""
+    name = "NASA POWER"
+    interval_seconds = 3600.0  # daily data
+
+    API_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
+
+    # Key energy locations
+    LOCATIONS = {
+        "Texas (Permian)": {"lat": 31.9, "lon": -102.1},
+        "California (Solar)": {"lat": 35.3, "lon": -118.5},
+        "Gulf of Mexico": {"lat": 28.0, "lon": -90.0},
+    }
+
+    async def poll(self) -> None:
+        try:
+            now = datetime.datetime.utcnow()
+            end = (now - datetime.timedelta(days=3)).strftime("%Y%m%d")  # 2-3 day lag
+            start = (now - datetime.timedelta(days=5)).strftime("%Y%m%d")
+
+            async with aiohttp.ClientSession() as session:
+                for loc_name, coords in self.LOCATIONS.items():
+                    params = {
+                        "parameters": "ALLSKY_SFC_SW_DWN,T2M,WS10M",
+                        "community": "RE",
+                        "longitude": coords["lon"],
+                        "latitude": coords["lat"],
+                        "start": start,
+                        "end": end,
+                        "format": "JSON",
+                    }
+                    try:
+                        async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    props = data.get("properties", {}).get("parameter", {})
+                    solar = props.get("ALLSKY_SFC_SW_DWN", {})
+                    temp = props.get("T2M", {})
+                    wind = props.get("WS10M", {})
+
+                    if not solar:
+                        continue
+
+                    # Get latest day
+                    latest_date = sorted(solar.keys())[-1] if solar else ""
+                    sol_val = solar.get(latest_date, -999)
+                    tmp_val = temp.get(latest_date, -999)
+                    wnd_val = wind.get(latest_date, -999)
+
+                    if sol_val == -999:
+                        continue
+
+                    key = f"power-{loc_name}-{latest_date}"
+                    if self._already_seen(key):
+                        continue
+
+                    await self.emit({
+                        "text": f"NASA POWER: {loc_name} — solar {sol_val:.1f} kWh/m2, temp {tmp_val:.1f}C, wind {wnd_val:.1f} m/s ({latest_date})",
+                        "location": loc_name, "solar": sol_val, "temp": tmp_val, "wind": wnd_val,
+                        "extra_json": json.dumps({"loc": loc_name, "solar": sol_val, "temp": tmp_val, "wind": wnd_val, "date": latest_date}),
+                    })
+        except Exception as e:
+            log.warning("[NASA POWER] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# FMCS F-7 LABOR NOTICES — 30-day strike warning
+# No auth. Legally mandated bargaining expiration notices.
+# ═══════════════════════════════════════════════════════
+
+class FmcsLaborSource(BaseSource):
+    """FMCS F-7 notices — 30-day advance strike warning system. No auth."""
+    name = "FMCS Labor"
+    interval_seconds = 3600.0  # monthly data
+
+    # Pattern: the FMCS publishes monthly Excel files
+    # We'll check the FMCS notices page for the latest
+    FMCS_PAGE_URL = "https://www.fmcs.gov/resources/documents-and-data/"
+
+    async def poll(self) -> None:
+        try:
+            # Poll the FMCS documents page for latest F-7 notice links
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.FMCS_PAGE_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    text = await resp.text()
+
+            # Look for F-7 notice file links
+            import re
+            links = re.findall(r'href="([^"]*F.?7[^"]*\.xlsx?)"', text, re.IGNORECASE)
+            if not links:
+                # Try alternate pattern
+                links = re.findall(r'href="([^"]*Notices[^"]*\.xlsx?)"', text, re.IGNORECASE)
+
+            for link in links[:2]:
+                key = f"fmcs-{link}"
+                if self._already_seen(key):
+                    continue
+
+                # Extract month from filename
+                month_match = re.search(r'(\w+-\d{4})', link)
+                month = month_match.group(1) if month_match else "latest"
+
+                await self.emit({
+                    "text": f"FMCS: New F-7 bargaining notices published ({month})",
+                    "file_url": link, "period": month,
+                    "extra_json": json.dumps({"url": link, "period": month}),
+                })
+
+        except Exception as e:
+            log.warning("[FMCS Labor] Error: %s", e)
+
+
 # ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
@@ -5800,6 +6129,24 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
         NewsApiAiSource(queue, api_key=config.get("NEWSAPI_AI_KEY", "")),
         MarketAuxSource(queue, api_key=config.get("MARKETAUX_API_KEY", "")),
         CurrentsApiSource(queue, api_key=config.get("CURRENTS_API_KEY", "")),
+
+        # -- Money Markets / Rates --
+        NyFedRatesSource(queue),
+
+        # -- Government Procurement --
+        UsaSpendingSource(queue),
+
+        # -- Nuclear / Geopolitical --
+        IaeaSource(queue),
+
+        # -- Health Surveillance --
+        CdcWastewaterSource(queue),
+
+        # -- Satellite Data --
+        NasaPowerSource(queue),
+
+        # -- Labor --
+        FmcsLaborSource(queue),
 
         # -- Aircraft Tracking --
         OpenSkySource(queue, client_id=config.get("OPENSKY_CLIENT_ID", ""), client_secret=config.get("OPENSKY_CLIENT_SECRET", "")),
