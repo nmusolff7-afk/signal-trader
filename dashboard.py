@@ -246,40 +246,41 @@ def get_observation_schema():
 
 @app.get("/api/stream")
 async def event_stream():
-    """Server-Sent Events stream — pushes new events instantly."""
+    """
+    Server-Sent Events — pushes events DIRECTLY from the consumer,
+    not by polling DB. Zero latency between event ingestion and browser display.
+    """
     import asyncio
-    import time
 
     async def generate():
-        last_id = 0
-        # Get initial latest ID
-        conn = get_db()
-        if conn:
-            try:
-                row = conn.execute("SELECT MAX(id) FROM raw_events").fetchone()
-                last_id = row[0] or 0
-            finally:
-                conn.close()
+        # Import the broadcast system from main.py
+        try:
+            from main import sse_clients, event_buffer
+        except ImportError:
+            yield "data: {\"error\": \"SSE not available\"}\n\n"
+            return
 
-        while True:
-            await asyncio.sleep(1)  # check every 1 second
-            conn = get_db()
-            if not conn:
-                continue
-            try:
-                rows = conn.execute("""
-                    SELECT id, ts, source, raw_text, event_id, confidence, tradeable
-                    FROM raw_events WHERE id > ? ORDER BY id ASC LIMIT 50
-                """, (last_id,)).fetchall()
+        # Create a personal queue for this SSE client
+        client_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+        sse_clients.append(client_queue)
 
-                for r in rows:
-                    event_data = json.dumps(dict(r))
-                    yield f"data: {event_data}\n\n"
-                    last_id = r["id"]
-            except Exception:
-                pass
-            finally:
-                conn.close()
+        try:
+            # Send recent buffered events first (catch-up)
+            for event in list(event_buffer)[-50:]:
+                yield f"data: {json.dumps(event)}\n\n"
+
+            # Then stream new events as they arrive
+            while True:
+                event = await asyncio.wait_for(client_queue.get(), timeout=30)
+                yield f"data: {json.dumps(event)}\n\n"
+        except asyncio.TimeoutError:
+            # Send keepalive
+            yield ": keepalive\n\n"
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
+        finally:
+            if client_queue in sse_clients:
+                sse_clients.remove(client_queue)
 
     return StreamingResponse(
         generate(),

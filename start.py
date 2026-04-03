@@ -1,12 +1,25 @@
 """
-start.py — Launch both APEX collector and dashboard in the same process.
-Railway runs a single service, so we run main.py as a background task
-and uvicorn as the foreground (Railway needs a bound port to stay alive).
+start.py — Single-process launcher
+====================================
+Runs collector + dashboard in ONE async event loop. No threads.
+
+Railway needs a bound port (uvicorn) to stay alive. The collector
+runs as async tasks in the same loop — if one crashes, we know about it.
 """
 import asyncio
 import os
-import threading
+import sys
+import logging
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(name)-20s  %(levelname)-8s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("apex.start")
 
 try:
     from dotenv import load_dotenv
@@ -15,23 +28,41 @@ except ImportError:
     pass
 
 
-def run_collector():
-    """Run the APEX data collector (main.py logic) in a background thread."""
+async def run_collector():
+    """Run the data collector (sources + consumer) as async tasks."""
     import main as apex_main
-    asyncio.run(apex_main.main())
+    await apex_main.main()
 
 
-def run_dashboard():
-    """Run the FastAPI dashboard server (foreground — Railway needs a bound port)."""
+def main():
+    """Start everything in one process, one event loop."""
     import uvicorn
+
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("dashboard:app", host="0.0.0.0", port=port, reload=False)
+
+    # Configure uvicorn to run in an existing event loop
+    config = uvicorn.Config(
+        "dashboard:app",
+        host="0.0.0.0",
+        port=port,
+        reload=False,
+        log_level="warning",  # reduce uvicorn noise
+    )
+    server = uvicorn.Server(config)
+
+    async def run_all():
+        # Start collector as a task (not a thread)
+        collector = asyncio.create_task(run_collector())
+        log.info("Collector started as async task")
+
+        # Start uvicorn as a task in the same loop
+        await server.serve()
+
+        # If uvicorn exits, cancel collector
+        collector.cancel()
+
+    asyncio.run(run_all())
 
 
 if __name__ == "__main__":
-    # Start collector in background thread
-    collector_thread = threading.Thread(target=run_collector, daemon=True, name="apex-collector")
-    collector_thread.start()
-
-    # Run dashboard in foreground (this blocks until process exits)
-    run_dashboard()
+    main()
