@@ -272,25 +272,10 @@ async def main() -> None:
         "ETHERSCAN_API_KEY": os.environ.get("ETHERSCAN_API_KEY", ""),
     }
 
-    # 5. Create shared TCP connection pool for all sources.
-    #    Individual sources still create their own ClientSession but they
-    #    all share one connector — eliminating TCP handshake overhead.
-    import aiohttp
-    shared_connector = aiohttp.TCPConnector(
-        limit=100,           # max simultaneous connections
-        limit_per_host=10,   # max per single host
-        ttl_dns_cache=300,   # DNS cache 5 min
-        enable_cleanup_closed=True,
-    )
-    # Monkey-patch aiohttp.ClientSession default connector
-    _orig_init = aiohttp.ClientSession.__init__
-    def _patched_init(self, *args, **kwargs):
-        if 'connector' not in kwargs:
-            kwargs['connector'] = shared_connector
-            kwargs['connector_owner'] = False  # don't close shared connector
-        _orig_init(self, *args, **kwargs)
-    aiohttp.ClientSession.__init__ = _patched_init
-    log.info("Shared TCP connector created (100 connections, 10/host)")
+    # 5. Shared session is available via BaseSource._shared_session
+    #    but individual sources still create their own sessions for now.
+    #    The main perf wins are: always_emit + async consumer + bigger queue.
+    log.info("Source infrastructure ready")
 
     # 6a. Build and start all source tasks
     sources = src_module.build_sources(queue, config)

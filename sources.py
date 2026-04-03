@@ -122,9 +122,9 @@ class BaseSource(ABC):
     async def run(self) -> None:
         """Main loop. Polls forever, sleeping interval_seconds between calls."""
         log.info("[%s] source started (interval: %ss)", self.name, self.interval_seconds)
-        # Stagger startup to avoid thundering herd — spread sources over first 30s
+        # Small stagger (0-3s) so sources don't all fire at the exact same instant
         import random
-        await asyncio.sleep(random.uniform(0, min(30, self.interval_seconds)))
+        await asyncio.sleep(random.uniform(0, min(3, self.interval_seconds)))
         while True:
             self._poll_count += 1
             try:
