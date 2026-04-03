@@ -60,6 +60,7 @@ class BaseSource(ABC):
         self.queue = queue
         self._seen: set[str] = set()
         self._poll_count = 0
+        self._newest_pub_ts: float = 0  # track newest publication timestamp per source
 
     @classmethod
     def set_shared_session(cls, session: 'aiohttp.ClientSession') -> None:
@@ -93,6 +94,30 @@ class BaseSource(ABC):
             for _ in range(excess):
                 self._seen.pop()
         return False
+
+    def _is_fresh_rss(self, entry) -> bool:
+        """Check if an RSS entry is newer than the last item we processed.
+        Prevents archive re-ingestion that floods the stream with old data."""
+        import time as _time
+        import calendar
+
+        pub = entry.get("published_parsed") or entry.get("updated_parsed")
+        if pub:
+            try:
+                entry_ts = calendar.timegm(pub)
+                # Skip anything older than 48 hours
+                if entry_ts < _time.time() - 172800:
+                    return False
+                # Skip if we've already seen newer items
+                if entry_ts <= self._newest_pub_ts:
+                    return False
+                self._newest_pub_ts = max(self._newest_pub_ts, entry_ts)
+                return True
+            except (ValueError, OverflowError, TypeError):
+                pass
+
+        # No pub date — allow through but still deduplicate by key
+        return True
 
     async def emit(self, item: dict) -> None:
         """Put a new item on the shared queue. Non-blocking."""
@@ -227,6 +252,8 @@ class OpecRssSource(BaseSource):
         feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
 
         for entry in feed.entries:
+            if not self._is_fresh_rss(entry):
+                continue
             uid = entry.get("id") or entry.get("link") or entry.get("title", "")
             if self._already_seen(uid):
                 continue
@@ -265,6 +292,8 @@ class FedRssSource(BaseSource):
         feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
 
         for entry in feed.entries:
+            if not self._is_fresh_rss(entry):
+                continue
             uid = entry.get("id") or entry.get("link", "")
             if self._already_seen(uid):
                 continue
@@ -385,6 +414,8 @@ class SecPressReleaseSource(BaseSource):
         feed = await loop.run_in_executor(None, feedparser.parse, self.SEC_NEWS_URL)
         
         for entry in feed.entries:
+            if not self._is_fresh_rss(entry):
+                continue
             uid = entry.get("id") or entry.get("link", "")
             if self._already_seen(uid):
                 continue
@@ -637,6 +668,8 @@ class EcbRssSource(BaseSource):
         feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
         
         for entry in feed.entries:
+            if not self._is_fresh_rss(entry):
+                continue
             uid = entry.get("id") or entry.get("link", "")
             if self._already_seen(uid):
                 continue
@@ -1117,6 +1150,8 @@ class FdaMedwatchSource(BaseSource):
             feed = await loop.run_in_executor(None, feedparser.parse, self.RECALL_RSS)
 
             for entry in feed.entries[:10]:
+                if not self._is_fresh_rss(entry):
+                    continue
                 uid = entry.get("id") or entry.get("link", "")
                 if self._already_seen(uid):
                     continue
@@ -1201,6 +1236,8 @@ class SecEnforcementSource(BaseSource):
                 feed = await loop.run_in_executor(None, feedparser.parse, url)
 
                 for entry in feed.entries[:10]:
+                    if not self._is_fresh_rss(entry):
+                        continue
                     uid = entry.get("id") or entry.get("link", "")
                     if self._already_seen(uid):
                         continue
@@ -1791,27 +1828,32 @@ class NwsSevereWeatherSource(BaseSource):
                         return
                     data = await resp.json()
 
-                for feature in data.get("features", [])[:20]:
+                # Deduplicate by event TYPE, not by individual county alert ID.
+                # Same storm = same event type = one signal, not 20 per-county copies.
+                seen_event_types = set()
+                for feature in data.get("features", []):
                     props = feature.get("properties", {})
-                    alert_id = props.get("id", "")
-                    if not alert_id or self._already_seen(alert_id):
-                        continue
-
                     event = props.get("event", "")
                     severity = props.get("severity", "")
                     headline = props.get("headline", "")
-                    area = props.get("areaDesc", "")[:100]
 
+                    # One alert per event type per poll (not per county)
+                    event_key = f"nws-{event}-{severity}"
+                    if event_key in seen_event_types:
+                        continue
+                    seen_event_types.add(event_key)
+
+                    if self._already_seen(event_key):
+                        continue
+
+                    area = props.get("areaDesc", "")[:100]
                     await self.emit({
                         "text": f"NWS {severity}: {event} — {headline[:150]}",
                         "event_type": event,
                         "severity": severity,
                         "area": area,
                         "extra_json": json.dumps({
-                            "alert_id": alert_id,
-                            "event": event,
-                            "severity": severity,
-                            "area": area,
+                            "event": event, "severity": severity, "area": area,
                         }),
                     })
 
@@ -1845,6 +1887,8 @@ class NhcTropicalSource(BaseSource):
             try:
                 feed = await loop.run_in_executor(None, feedparser.parse, url)
                 for entry in feed.entries[:10]:
+                    if not self._is_fresh_rss(entry):
+                        continue
                     uid = entry.get("id") or entry.get("link", "")
                     if self._already_seen(uid):
                         continue
@@ -1889,6 +1933,8 @@ class FercEnergySource(BaseSource):
                 lambda: feedparser.parse(self.RSS_URL, request_headers={"User-Agent": "Mozilla/5.0 (compatible; APEX Signal Trader)"}),
             )
             for entry in feed.entries[:10]:
+                if not self._is_fresh_rss(entry):
+                    continue
                 uid = entry.get("id") or entry.get("link", "")
                 if self._already_seen(uid):
                     continue
@@ -2290,6 +2336,8 @@ class NrcReactorSource(BaseSource):
             try:
                 feed = await loop.run_in_executor(None, feedparser.parse, url)
                 for entry in feed.entries[:10]:
+                    if not self._is_fresh_rss(entry):
+                        continue
                     uid = entry.get("id") or entry.get("link", "")
                     if self._already_seen(uid):
                         continue
@@ -2327,6 +2375,8 @@ class WhiteHouseSource(BaseSource):
             try:
                 feed = await loop.run_in_executor(None, feedparser.parse, url)
                 for entry in feed.entries[:10]:
+                    if not self._is_fresh_rss(entry):
+                        continue
                     uid = entry.get("id") or entry.get("link", "")
                     if self._already_seen(uid):
                         continue
@@ -2797,6 +2847,8 @@ class BoeSource(BaseSource):
             try:
                 feed = await loop.run_in_executor(None, feedparser.parse, url)
                 for entry in feed.entries[:10]:
+                    if not self._is_fresh_rss(entry):
+                        continue
                     uid = entry.get("id") or entry.get("link", "")
                     if self._already_seen(uid):
                         continue
@@ -3537,6 +3589,8 @@ class BojSource(BaseSource):
             loop = asyncio.get_event_loop()
             feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
             for entry in feed.entries[:10]:
+                if not self._is_fresh_rss(entry):
+                    continue
                 uid = entry.get("id") or entry.get("link", "")
                 if self._already_seen(uid):
                     continue
@@ -3572,6 +3626,8 @@ class DojAntitrustSource(BaseSource):
             try:
                 feed = await loop.run_in_executor(None, feedparser.parse, url)
                 for entry in feed.entries[:10]:
+                    if not self._is_fresh_rss(entry):
+                        continue
                     uid = entry.get("id") or entry.get("link", "")
                     if self._already_seen(uid):
                         continue
@@ -3628,6 +3684,8 @@ class BocSource(BaseSource):
             loop = asyncio.get_event_loop()
             feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
             for entry in feed.entries[:5]:
+                if not self._is_fresh_rss(entry):
+                    continue
                 uid = entry.get("id") or entry.get("link", "")
                 if self._already_seen(uid):
                     continue
@@ -3835,6 +3893,8 @@ class SnbSource(BaseSource):
             try:
                 feed = await loop.run_in_executor(None, feedparser.parse, url)
                 for entry in feed.entries[:10]:
+                    if not self._is_fresh_rss(entry):
+                        continue
                     uid = entry.get("id") or entry.get("link", "")
                     if self._already_seen(uid):
                         continue
@@ -3938,6 +3998,8 @@ class FtcCompetitionSource(BaseSource):
                 lambda: feedparser.parse(self.RSS_URL, request_headers={"User-Agent": "Mozilla/5.0 (compatible; APEX Signal Trader)"}),
             )
             for entry in feed.entries[:10]:
+                if not self._is_fresh_rss(entry):
+                    continue
                 uid = entry.get("id") or entry.get("link", "")
                 if self._already_seen(uid):
                     continue
@@ -4656,6 +4718,8 @@ class BbcNewsSource(BaseSource):
             try:
                 feed = await loop.run_in_executor(None, feedparser.parse, url)
                 for entry in feed.entries[:5]:
+                    if not self._is_fresh_rss(entry):
+                        continue
                     uid = entry.get("id") or entry.get("link", "")
                     if self._already_seen(uid):
                         continue
@@ -4773,6 +4837,8 @@ class AlJazeeraSource(BaseSource):
             loop = asyncio.get_event_loop()
             feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
             for entry in feed.entries[:10]:
+                if not self._is_fresh_rss(entry):
+                    continue
                 uid = entry.get("id") or entry.get("link", "")
                 if self._already_seen(uid):
                     continue
@@ -5479,11 +5545,15 @@ class MetaculusSource(BaseSource):
 # ═══════════════════════════════════════════════════════
 
 class PredictItSource(BaseSource):
-    """PredictIt — US political market prices. No auth."""
+    """PredictIt — US political market prices. No auth. Delta-only: >2% change."""
     name = "PredictIt"
     interval_seconds = 120.0
 
     API_URL = "https://www.predictit.org/api/marketdata/all/"
+
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__(queue)
+        self._last_prices = {}  # market_id -> last price
 
     async def poll(self) -> None:
         try:
@@ -5507,11 +5577,17 @@ class PredictItSource(BaseSource):
                 contract_name = top.get("name", top.get("shortName", ""))[:60]
                 price = top.get("lastTradePrice", 0)
 
-                key = f"predictit-{mid}-{price}"
+                prob = float(price) * 100 if price else 0
+
+                # Only emit on >2% probability change
+                last_prob = self._last_prices.get(mid)
+                if last_prob is not None and abs(prob - last_prob) < 2.0:
+                    continue
+                self._last_prices[mid] = prob
+
+                key = f"predictit-{mid}-{int(prob)}"
                 if self._already_seen(key):
                     continue
-
-                prob = float(price) * 100 if price else 0
 
                 await self.emit({
                     "text": f"PredictIt: \"{name}\" — {contract_name} at {prob:.0f}%",
@@ -5947,6 +6023,8 @@ class IaeaSource(BaseSource):
             try:
                 feed = await loop.run_in_executor(None, feedparser.parse, url)
                 for entry in feed.entries[:10]:
+                    if not self._is_fresh_rss(entry):
+                        continue
                     uid = entry.get("id") or entry.get("link", "")
                     if self._already_seen(uid):
                         continue
@@ -6216,6 +6294,8 @@ class OpenFecSource(BaseSource):
             loop = asyncio.get_event_loop()
             feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
             for entry in feed.entries[:10]:
+                if not self._is_fresh_rss(entry):
+                    continue
                 uid = entry.get("id") or entry.get("link", "")
                 if self._already_seen(uid):
                     continue
