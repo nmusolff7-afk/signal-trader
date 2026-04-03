@@ -42,7 +42,11 @@ log = logging.getLogger(__name__)
 DB_PATH = Path(__file__).parent / "apex.db"
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-STATE_DIM = 214               # from observation_builder.state_vector_schema()
+try:
+    from observation_builder import ObservationBuilder, NUM_EVENT_SLOTS
+    STATE_DIM = len(ObservationBuilder.state_vector_schema())
+except Exception:
+    STATE_DIM = 434  # 6 temporal + 16 price + 200 flags + 200 confs + 10 macro + 8 portfolio
 MAX_POSITION = 1              # max contracts per asset
 INITIAL_CAPITAL = 12000.0     # starting capital USD
 MAX_DAILY_LOSS = 500.0        # circuit breaker — episode ends
