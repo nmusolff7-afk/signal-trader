@@ -85,6 +85,7 @@ ALL_SOURCES = [
     "Kalshi", "Metaculus", "PredictIt", "Manifold",
     "Finnhub", "NewsAPI.ai", "MarketAux", "Currents API",
     "NY Fed Rates", "USASpending", "IAEA", "CDC Wastewater", "NASA POWER", "FMCS Labor",
+    "USDA NASS", "OpenFEC", "Odds API", "Nasdaq CHRIS",
 ]
 
 # ── API keys we expect ───────────────────────────────────────────────────────

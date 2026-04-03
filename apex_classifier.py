@@ -1711,6 +1711,14 @@ SOURCE_METHOD_MAP = {
     "NASA POWER":           "noaa",
     # Labor
     "FMCS Labor":           "fed",
+    # Agriculture
+    "USDA NASS":            "eia",
+    # Political finance
+    "OpenFEC":              "federal_register",
+    # Sports/events
+    "Odds API":             "fed",
+    # Commodity futures
+    "Nasdaq CHRIS":         "eia",
 }
 
 # Sources where keyword will often fail — send to transformer

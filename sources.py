@@ -5999,6 +5999,278 @@ class FmcsLaborSource(BaseSource):
 
 
 # ═══════════════════════════════════════════════════════
+# USDA NASS QUICKSTATS — crop conditions + production
+# Free key. Weekly crop progress, condition ratings.
+# ═══════════════════════════════════════════════════════
+
+class UsdaNassSource(BaseSource):
+    """USDA NASS — crop conditions, production, acreage. Free key."""
+    name = "USDA NASS"
+    interval_seconds = 1800.0
+
+    API_URL = "https://quickstats.nass.usda.gov/api/api_GET/"
+
+    QUERIES = [
+        {"commodity_desc": "CORN", "statisticcat_desc": "CONDITION", "agg_level_desc": "NATIONAL"},
+        {"commodity_desc": "SOYBEANS", "statisticcat_desc": "CONDITION", "agg_level_desc": "NATIONAL"},
+        {"commodity_desc": "WHEAT", "statisticcat_desc": "CONDITION", "agg_level_desc": "NATIONAL"},
+    ]
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("USDA_NASS_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+        try:
+            year = str(datetime.datetime.utcnow().year)
+            async with aiohttp.ClientSession() as session:
+                for q in self.QUERIES:
+                    params = {**q, "key": self.api_key, "year": year, "format": "JSON"}
+                    try:
+                        async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    records = data.get("data", [])
+                    if not records:
+                        continue
+
+                    # Get latest week
+                    latest = records[0]
+                    commodity = latest.get("commodity_desc", "")
+                    value = latest.get("Value", latest.get("value", ""))
+                    unit = latest.get("unit_desc", "")
+                    week = latest.get("week_ending", latest.get("reference_period_desc", ""))
+                    category = latest.get("domaincat_desc", latest.get("domain_desc", ""))
+
+                    key = f"nass-{commodity}-{week}-{value}"
+                    if self._already_seen(key):
+                        continue
+
+                    await self.emit({
+                        "text": f"USDA NASS: {commodity} {category} = {value}{unit} (week ending {week})",
+                        "commodity": commodity, "value": value, "week": week,
+                        "extra_json": json.dumps({"commodity": commodity, "value": value, "week": week}),
+                    })
+        except Exception as e:
+            log.warning("[USDA NASS] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# OPENFEC — campaign finance + Super PAC spending
+# Free key. Real-time e-filing RSS (no auth) + structured API.
+# ═══════════════════════════════════════════════════════
+
+class OpenFecSource(BaseSource):
+    """OpenFEC — campaign finance, Super PAC spending. Free key + RSS."""
+    name = "OpenFEC"
+    interval_seconds = 600.0
+
+    RSS_URL = "https://efilingapps.fec.gov/rss/generate?preDefinedFilingType=ALL"
+    API_URL = "https://api.open.fec.gov/v1/schedules/schedule_e/"
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("OPENFEC_API_KEY", "")
+
+    async def poll(self) -> None:
+        # RSS feed (no auth needed)
+        try:
+            loop = asyncio.get_event_loop()
+            feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
+            for entry in feed.entries[:10]:
+                uid = entry.get("id") or entry.get("link", "")
+                if self._already_seen(uid):
+                    continue
+                title = entry.get("title", "")
+                await self.emit({
+                    "text": f"FEC Filing: {title}",
+                    "title": title, "link": entry.get("link", ""),
+                    "extra_json": json.dumps({"uid": uid}),
+                })
+        except Exception as e:
+            log.warning("[OpenFEC] RSS error: %s", e)
+
+        # Schedule E (Super PAC independent expenditures) via API
+        if not self.api_key:
+            return
+        try:
+            params = {
+                "api_key": self.api_key,
+                "sort": "-expenditure_date",
+                "per_page": "10",
+                "min_amount": "100000",
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+
+            for result in data.get("results", []):
+                sub_id = result.get("sub_id", "")
+                if not sub_id or self._already_seen(str(sub_id)):
+                    continue
+                committee = result.get("committee", {}).get("name", "")
+                candidate = result.get("candidate_name", "")
+                amount = result.get("expenditure_amount", 0)
+                support = result.get("support_oppose_indicator", "")
+                date = result.get("expenditure_date", "")
+
+                action = "SUPPORTING" if support == "S" else "OPPOSING"
+                await self.emit({
+                    "text": f"FEC: {committee} spent ${amount:,.0f} {action} {candidate} ({date})",
+                    "committee": committee, "candidate": candidate, "amount": amount, "action": action,
+                    "extra_json": json.dumps({"committee": committee, "candidate": candidate, "amount": amount}),
+                })
+        except Exception as e:
+            log.warning("[OpenFEC] API error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# THE ODDS API — sports/event odds as breaking news proxy
+# Free key. 500 credits/month. Line movement = information signal.
+# ═══════════════════════════════════════════════════════
+
+class OddsApiSource(BaseSource):
+    """The Odds API — sports odds line movement as news detection. Free key."""
+    name = "Odds API"
+    interval_seconds = 1800.0  # conserve 500 credits/month
+
+    API_URL = "https://api.the-odds-api.com/v4/sports"
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("ODDS_API_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+        try:
+            # First get active sports (free, no credits)
+            async with aiohttp.ClientSession() as session:
+                params = {"apiKey": self.api_key}
+                async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    sports = await resp.json()
+
+                # Find active sports with upcoming events
+                active = [s for s in (sports if isinstance(sports, list) else [])
+                          if s.get("active") and not s.get("has_outrights")]
+
+                if not active:
+                    return
+
+                # Get events for top sport (costs 1 credit per market*region)
+                top_sport = active[0].get("key", "")
+                events_url = f"{self.API_URL}/{top_sport}/events"
+                async with session.get(events_url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    events = await resp.json()
+
+                for event in (events if isinstance(events, list) else [])[:5]:
+                    eid = event.get("id", "")
+                    if not eid or self._already_seen(eid):
+                        continue
+                    home = event.get("home_team", "")
+                    away = event.get("away_team", "")
+                    commence = event.get("commence_time", "")
+
+                    await self.emit({
+                        "text": f"Odds: {away} @ {home} ({top_sport}) — {commence}",
+                        "sport": top_sport, "home": home, "away": away,
+                        "extra_json": json.dumps({"id": eid, "sport": top_sport, "home": home, "away": away}),
+                    })
+        except Exception as e:
+            log.warning("[Odds API] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
+# NASDAQ DATA LINK (CHRIS) — commodity futures settlements
+# Free key. 600+ continuous futures contracts.
+# ═══════════════════════════════════════════════════════
+
+class NasdaqDataLinkSource(BaseSource):
+    """Nasdaq Data Link CHRIS — daily commodity futures settlements. Free key."""
+    name = "Nasdaq CHRIS"
+    interval_seconds = 1800.0  # daily data
+
+    API_URL = "https://data.nasdaq.com/api/v3/datasets/CHRIS"
+
+    # Key continuous contracts
+    CONTRACTS = {
+        "CME_CL1": "Crude Oil (WTI)",
+        "CME_NG1": "Natural Gas",
+        "CME_GC1": "Gold",
+        "CME_SI1": "Silver",
+        "CME_ES1": "E-mini S&P 500",
+        "EUREX_FESX1": "Euro Stoxx 50",
+    }
+
+    def __init__(self, queue: asyncio.Queue, api_key: str = ""):
+        super().__init__(queue)
+        self.api_key = api_key or os.environ.get("NASDAQ_DATA_LINK_KEY", "")
+
+    async def poll(self) -> None:
+        if not self.api_key:
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                for contract, label in self.CONTRACTS.items():
+                    url = f"{self.API_URL}/{contract}.json"
+                    params = {"api_key": self.api_key, "rows": "2"}
+                    try:
+                        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                    except Exception:
+                        continue
+
+                    dataset = data.get("dataset", {})
+                    rows = dataset.get("data", [])
+                    columns = dataset.get("column_names", [])
+
+                    if not rows or not columns:
+                        continue
+
+                    latest = dict(zip(columns, rows[0]))
+                    date = latest.get("Date", "")
+                    settle = latest.get("Settle", latest.get("Last", ""))
+                    volume = latest.get("Volume", "")
+                    oi = latest.get("Previous Day Open Interest", latest.get("Open Interest", ""))
+
+                    key = f"chris-{contract}-{date}-{settle}"
+                    if self._already_seen(key):
+                        continue
+
+                    change = ""
+                    if len(rows) > 1:
+                        prev = dict(zip(columns, rows[1]))
+                        prev_settle = prev.get("Settle", prev.get("Last", 0))
+                        try:
+                            delta = float(settle) - float(prev_settle)
+                            change = f" ({delta:+.2f})"
+                        except (ValueError, TypeError):
+                            pass
+
+                    await self.emit({
+                        "text": f"CHRIS: {label} settle ${settle}{change} vol={volume} OI={oi} ({date})",
+                        "contract": contract, "label": label, "settle": settle, "volume": volume,
+                        "extra_json": json.dumps({"contract": contract, "settle": settle, "volume": volume, "date": date}),
+                    })
+        except Exception as e:
+            log.warning("[Nasdaq CHRIS] Error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════
 # REGISTRY — add new sources here
 # main.py reads this list to start all source tasks
 # ═══════════════════════════════════════════════════════
@@ -6147,6 +6419,18 @@ def build_sources(queue: asyncio.Queue, config: dict) -> list[BaseSource]:
 
         # -- Labor --
         FmcsLaborSource(queue),
+
+        # -- Agriculture (crop conditions) --
+        UsdaNassSource(queue, api_key=config.get("USDA_NASS_KEY", "")),
+
+        # -- Political Finance --
+        OpenFecSource(queue, api_key=config.get("OPENFEC_API_KEY", "")),
+
+        # -- Sports / Event Odds --
+        OddsApiSource(queue, api_key=config.get("ODDS_API_KEY", "")),
+
+        # -- Commodity Futures Settlements --
+        NasdaqDataLinkSource(queue, api_key=config.get("NASDAQ_DATA_LINK_KEY", "")),
 
         # -- Aircraft Tracking --
         OpenSkySource(queue, client_id=config.get("OPENSKY_CLIENT_ID", ""), client_secret=config.get("OPENSKY_CLIENT_SECRET", "")),
