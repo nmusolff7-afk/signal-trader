@@ -1651,7 +1651,6 @@ class CftcCotSource(BaseSource):
                 params = {
                     "$order": "report_date_as_yyyy_mm_dd DESC",
                     "$limit": "20",
-                    "$where": "market_and_exchange_names in(" + ",".join(f"'{m}'" for m in self.TRACKED_MARKETS.keys()) + ")",
                 }
 
                 async with session.get(self.COT_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
@@ -1838,7 +1837,10 @@ class FercEnergySource(BaseSource):
     async def poll(self) -> None:
         try:
             loop = asyncio.get_event_loop()
-            feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
+            feed = await loop.run_in_executor(
+                None,
+                lambda: feedparser.parse(self.RSS_URL, request_headers={"User-Agent": "Mozilla/5.0 (compatible; APEX Signal Trader)"}),
+            )
             for entry in feed.entries[:10]:
                 uid = entry.get("id") or entry.get("link", "")
                 if self._already_seen(uid):
@@ -2167,50 +2169,57 @@ class MisoGridSource(BaseSource):
     name = "MISO Grid"
     interval_seconds = 120.0
 
-    LMP_URL = "https://api.misoenergy.org/MISORTWDBIReporter/Reporter.asmx?messageType=currentinterval&returnType=json"
-    FUEL_URL = "https://api.misoenergy.org/MISORTWDDataBroker/DataBrokerServices.asmx?messageType=getfuelmix&returnType=json"
+    FUEL_URLS = [
+        "https://api.misoenergy.org/MISORTWDDataBroker/DataBrokerServices.asmx?messageType=getfuelmix&returnType=json",
+        "https://www.misoenergy.org/api/MISORTWDDataBroker/getfuelmix",
+    ]
 
     async def poll(self) -> None:
         try:
             async with aiohttp.ClientSession() as session:
-                # Fuel mix
-                async with session.get(self.FUEL_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        fuel_mix = data.get("Fuel", {}).get("Type", []) if isinstance(data, dict) else []
-                        if isinstance(data, dict):
-                            # MISO returns nested structure
-                            categories = data.get("Fuel", data.get("FuelMix", {}))
-                            if isinstance(categories, dict):
-                                fuel_mix = categories.get("Type", [])
-                            elif isinstance(categories, list):
-                                fuel_mix = categories
-                        for fuel in (fuel_mix if isinstance(fuel_mix, list) else []):
-                            if isinstance(fuel, dict):
-                                cat = fuel.get("CATEGORY", fuel.get("category", ""))
-                                gen = fuel.get("ACT", fuel.get("act", 0))
-                                key = f"miso-fuel-{cat}-{gen}"
-                                if not self._already_seen(key):
-                                    await self.emit({
-                                        "text": f"MISO Fuel Mix: {cat} = {gen} MW",
-                                        "category": cat,
-                                        "generation_mw": gen,
-                                        "extra_json": json.dumps({"category": cat, "mw": gen}),
-                                    })
+                data = None
+                for fuel_url in self.FUEL_URLS:
+                    try:
+                        async with session.get(fuel_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                            # Check for error response
+                            if isinstance(data, dict) and "error" in data:
+                                log.warning("[MISO Grid] API returned error: %s — trying next endpoint", data["error"])
+                                data = None
+                                continue
+                            break
+                    except Exception:
+                        continue
 
-                # LMP snapshot
-                async with session.get(self.LMP_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        # Extract summary LMP if available
-                        if isinstance(data, dict):
-                            refid = data.get("RefId", "")
-                            key = f"miso-lmp-{refid}"
-                            if refid and not self._already_seen(key):
-                                await self.emit({
-                                    "text": f"MISO: LMP interval update {refid}",
-                                    "extra_json": json.dumps({"ref_id": refid}),
-                                })
+                if data is None:
+                    log.warning("[MISO Grid] All fuel mix endpoints failed — MISO API may be down")
+                    return
+
+                fuel_mix = []
+                if isinstance(data, dict):
+                    # MISO returns nested structure
+                    categories = data.get("Fuel", data.get("FuelMix", {}))
+                    if isinstance(categories, dict):
+                        fuel_mix = categories.get("Type", [])
+                    elif isinstance(categories, list):
+                        fuel_mix = categories
+                elif isinstance(data, list):
+                    fuel_mix = data
+
+                for fuel in (fuel_mix if isinstance(fuel_mix, list) else []):
+                    if isinstance(fuel, dict):
+                        cat = fuel.get("CATEGORY", fuel.get("category", ""))
+                        gen = fuel.get("ACT", fuel.get("act", 0))
+                        key = f"miso-fuel-{cat}-{gen}"
+                        if not self._already_seen(key):
+                            await self.emit({
+                                "text": f"MISO Fuel Mix: {cat} = {gen} MW",
+                                "category": cat,
+                                "generation_mw": gen,
+                                "extra_json": json.dumps({"category": cat, "mw": gen}),
+                            })
         except Exception as e:
             log.warning("[MISO Grid] Error: %s", e)
 
@@ -2416,7 +2425,7 @@ class WhoOutbreakSource(BaseSource):
                         return
                     data = await resp.json()
 
-                items = data.get("value", data) if isinstance(data, dict) else data
+                items = data.get("value", []) if isinstance(data, dict) else data
                 for item in (items if isinstance(items, list) else []):
                     uid = item.get("Id", item.get("UrlName", ""))
                     if not uid or self._already_seen(str(uid)):
@@ -2634,7 +2643,7 @@ class GdeltDocSource(BaseSource):
                         "query": query,
                         "mode": "artlist",
                         "maxrecords": "5",
-                        "timespan": "15min",
+                        "timespan": "60min",
                         "format": "json",
                         "sort": "datedesc",
                     }
@@ -3325,46 +3334,52 @@ class CaisoSource(BaseSource):
     name = "CAISO"
     interval_seconds = 120.0
 
-    # Use the simpler today's outlook endpoint
-    OUTLOOK_URL = "http://www.caiso.com/outlook/SP/fuelsource.csv"
+    # Primary: CAISO Today's Outlook API
+    OUTLOOK_URL = "https://www.caiso.com/api/TodaysOutlook/GetFuelTypeData"
 
     async def poll(self) -> None:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(self.OUTLOOK_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status != 200:
-                        return
-                    text = await resp.text()
+                try:
+                    async with session.get(self.OUTLOOK_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status != 200:
+                            log.warning("[CAISO] API returned HTTP %s — endpoint may have changed", resp.status)
+                            return
+                        data = await resp.json()
+                except Exception as fetch_err:
+                    log.warning("[CAISO] Fetch failed: %s — endpoint may be down", fetch_err)
+                    return
 
-            lines = text.strip().split("\n")
-            if len(lines) < 2:
+            # API returns a list of fuel type objects or a dict with nested data
+            items = data if isinstance(data, list) else data.get("data", data.get("Fuels", []))
+            if not isinstance(items, list) or not items:
+                log.warning("[CAISO] Unexpected response format — skipping")
                 return
 
-            headers = [h.strip() for h in lines[0].split(",")]
-            # Get latest row
-            latest = lines[-1].split(",")
-            if len(latest) < len(headers):
-                return
+            summary = {}
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                fuel = item.get("FuelType", item.get("fuel_type", item.get("name", "")))
+                gen = item.get("CurrentValue", item.get("current", item.get("value", 0)))
+                if fuel:
+                    summary[fuel] = gen
 
-            row = dict(zip(headers, latest))
-            time_val = row.get("Time", row.get("time", ""))
-
-            key = f"caiso-{time_val}"
+            key = f"caiso-{json.dumps(summary, sort_keys=True)}"
             if self._already_seen(key):
                 return
 
-            # Extract key generation sources
-            natural_gas = row.get("Natural Gas", row.get("natural_gas", "0"))
-            solar = row.get("Solar", row.get("solar", "0"))
-            wind = row.get("Wind", row.get("wind", "0"))
-            imports = row.get("Imports", row.get("imports", "0"))
+            natural_gas = summary.get("Natural Gas", summary.get("Gas", "0"))
+            solar = summary.get("Solar", "0")
+            wind = summary.get("Wind", "0")
+            imports = summary.get("Imports", "0")
 
             await self.emit({
-                "text": f"CAISO: Gas={natural_gas}MW Solar={solar}MW Wind={wind}MW Imports={imports}MW ({time_val})",
+                "text": f"CAISO: Gas={natural_gas}MW Solar={solar}MW Wind={wind}MW Imports={imports}MW",
                 "natural_gas_mw": natural_gas,
                 "solar_mw": solar,
                 "wind_mw": wind,
-                "extra_json": json.dumps(row),
+                "extra_json": json.dumps(summary),
             })
         except Exception as e:
             log.warning("[CAISO] Error: %s", e)
@@ -3831,7 +3846,10 @@ class FtcCompetitionSource(BaseSource):
     async def poll(self) -> None:
         try:
             loop = asyncio.get_event_loop()
-            feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
+            feed = await loop.run_in_executor(
+                None,
+                lambda: feedparser.parse(self.RSS_URL, request_headers={"User-Agent": "Mozilla/5.0 (compatible; APEX Signal Trader)"}),
+            )
             for entry in feed.entries[:10]:
                 uid = entry.get("id") or entry.get("link", "")
                 if self._already_seen(uid):
@@ -3938,7 +3956,7 @@ class EurostatSource(BaseSource):
         try:
             async with aiohttp.ClientSession() as session:
                 for dataset, label in self.DATASETS.items():
-                    url = f"{self.API_URL}/{dataset}?format=JSON&lang=en&geo=EA20&sinceTimePeriod=2025M01"
+                    url = f"{self.API_URL}/{dataset}?format=JSON&lang=en&geo=EA20&startPeriod=2025-01"
                     try:
                         async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                             if resp.status != 200:
@@ -4357,7 +4375,7 @@ class ReliefWebSource(BaseSource):
     name = "ReliefWeb"
     interval_seconds = 300.0
 
-    API_URL = "https://api.reliefweb.int/v1/reports"
+    API_URL = "https://api.reliefweb.int/v2/reports"
 
     async def poll(self) -> None:
         try:
@@ -4701,18 +4719,24 @@ class DroughtMonitorSource(BaseSource):
                 async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
                         return
-                    data = await resp.json()
+                    text = await resp.text()
 
-            items = data if isinstance(data, list) else [data]
-            for item in items[-2:]:
-                if not isinstance(item, dict):
+            # API returns CSV: MapDate,AreaOfInterest,None,D0,D1,D2,D3,D4,ValidStart,ValidEnd,StatisticFormatID
+            lines = text.strip().split("\n")
+            if len(lines) < 2:
+                return
+            headers_row = [h.strip() for h in lines[0].split(",")]
+            for line in lines[-2:]:
+                cols = line.split(",")
+                if len(cols) < len(headers_row):
                     continue
-                date = item.get("MapDate", item.get("mapDate", ""))
-                d0 = item.get("D0", item.get("d0", 0))
-                d1 = item.get("D1", item.get("d1", 0))
-                d2 = item.get("D2", item.get("d2", 0))
-                d3 = item.get("D3", item.get("d3", 0))
-                d4 = item.get("D4", item.get("d4", 0))
+                row = dict(zip(headers_row, cols))
+                date = row.get("MapDate", "").strip()
+                d0 = row.get("D0", "0").strip()
+                d1 = row.get("D1", "0").strip()
+                d2 = row.get("D2", "0").strip()
+                d3 = row.get("D3", "0").strip()
+                d4 = row.get("D4", "0").strip()
 
                 key = f"drought-{date}"
                 if not date or self._already_seen(key):
@@ -4998,7 +5022,7 @@ class CnnFearGreedSource(BaseSource):
             today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
             url = f"https://production.dataviz.cnn.io/index/fearandgreed/graphdata/{today}"
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
                         return
                     data = await resp.json()
@@ -5408,7 +5432,7 @@ class ManifoldSource(BaseSource):
     async def poll(self) -> None:
         try:
             async with aiohttp.ClientSession() as session:
-                params = {"limit": "50", "sort": "last-updated"}
+                params = {"limit": "50", "sort": "updated-time"}
                 async with session.get(self.API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
                         return
@@ -5466,8 +5490,8 @@ class FinnhubSource(BaseSource):
         try:
             async with aiohttp.ClientSession() as session:
                 for ticker in self.TICKERS:
-                    # News sentiment
-                    url = f"{self.BASE_URL}/news-sentiment?symbol={ticker}&token={self.api_key}"
+                    # Quote endpoint (news-sentiment returns 403)
+                    url = f"{self.BASE_URL}/quote?symbol={ticker}&token={self.api_key}"
                     try:
                         async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                             if resp.status != 200:
@@ -5476,22 +5500,22 @@ class FinnhubSource(BaseSource):
                     except Exception:
                         continue
 
-                    sentiment = data.get("sentiment", {})
-                    buzz = data.get("buzz", {})
-                    score = sentiment.get("bearishPercent", 0)
-                    bullish = sentiment.get("bullishPercent", 0)
-                    articles = buzz.get("articlesInLastWeek", 0)
-                    buzz_val = buzz.get("buzz", 0)
+                    price = data.get("c", 0)  # current price
+                    change = data.get("d", 0)  # change
+                    pct = data.get("dp", 0)  # percent change
+                    high = data.get("h", 0)  # daily high
+                    low = data.get("l", 0)  # daily low
+                    prev = data.get("pc", 0)  # previous close
 
-                    key = f"finnhub-{ticker}-{bullish:.2f}-{articles}"
+                    key = f"finnhub-{ticker}-{price}-{change}"
                     if self._already_seen(key):
                         continue
 
-                    if articles > 0:
+                    if price:
                         await self.emit({
-                            "text": f"Finnhub {ticker}: {bullish:.0%} bullish, {score:.0%} bearish ({articles} articles, buzz {buzz_val:.1f}x)",
-                            "ticker": ticker, "bullish": bullish, "bearish": score, "articles": articles,
-                            "extra_json": json.dumps({"ticker": ticker, "bullish": bullish, "bearish": score, "articles": articles}),
+                            "text": f"Finnhub {ticker}: ${price:.2f} ({change:+.2f}, {pct:+.1f}%) H={high:.2f} L={low:.2f}",
+                            "ticker": ticker, "price": price, "change": change, "pct_change": pct, "high": high, "low": low,
+                            "extra_json": json.dumps({"ticker": ticker, "price": price, "change": change, "pct": pct, "high": high, "low": low}),
                         })
         except Exception as e:
             log.warning("[Finnhub] Error: %s", e)
