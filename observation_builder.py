@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 TICK_INTERVAL = 60          # seconds between observation ticks
-NUM_EVENT_SLOTS = 701       # E000 (unused) + E001..E700
+NUM_EVENT_SLOTS = 901       # E000 (unused) + E001..E900
 PRICE_ASSETS = ["BTC", "ETH"]  # assets we track prices for
 LOOKBACK_RETURNS = [60, 300, 900]  # 1m, 5m, 15m price returns
 
