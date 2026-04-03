@@ -1924,6 +1924,14 @@ class NhcTropicalSource(BaseSource):
                     title = entry.get("title", "")
                     summary = entry.get("summary", "")[:200]
 
+                    # Filter out static header text and informational content
+                    title_lower = title.lower()
+                    if any(s in title_lower for s in [
+                        "hurricane season runs from", "about the national hurricane",
+                        "subscribe", "follow us", "nhc website", "disclaimers"
+                    ]):
+                        continue
+
                     await self.emit({
                         "text": f"NHC: {title}",
                         "title": title,
@@ -3716,6 +3724,9 @@ class BocSource(BaseSource):
         try:
             loop = asyncio.get_event_loop()
             feed = await loop.run_in_executor(None, feedparser.parse, self.RSS_URL)
+            # Filter out holiday calendar entries and static content
+            NOISE_WORDS = ["boxing day", "christmas", "new year", "holiday", "victoria day",
+                           "thanksgiving", "labour day", "canada day", "remembrance day"]
             for entry in feed.entries[:5]:
                 if not self._is_fresh_rss(entry):
                     continue
@@ -3723,6 +3734,8 @@ class BocSource(BaseSource):
                 if self._already_seen(uid):
                     continue
                 title = entry.get("title", "")
+                if any(nw in title.lower() for nw in NOISE_WORDS):
+                    continue
                 await self.emit({
                     "text": f"BoC: {title}",
                     "title": title,
@@ -4911,26 +4924,38 @@ class DroughtMonitorSource(BaseSource):
                         return
                     text = await resp.text()
 
-            # API returns CSV: MapDate,AreaOfInterest,None,D0,D1,D2,D3,D4,ValidStart,ValidEnd,StatisticFormatID
-            lines = text.strip().split("\n")
-            if len(lines) < 2:
+            # API returns CSV with quoted fields containing commas (area sq mi)
+            # Use csv module for proper parsing
+            import csv, io
+            reader = csv.DictReader(io.StringIO(text))
+            rows_parsed = list(reader)
+            if not rows_parsed:
                 return
-            headers_row = [h.strip() for h in lines[0].split(",")]
-            for line in lines[-2:]:
-                cols = line.split(",")
-                if len(cols) < len(headers_row):
-                    continue
-                row = dict(zip(headers_row, cols))
+
+            # CONUS total area for percentage calculation (~3,119,884 sq mi)
+            CONUS_AREA = 3119884.0
+
+            for row in rows_parsed[-2:]:
                 date = row.get("MapDate", "").strip()
-                d0 = row.get("D0", "0").strip()
-                d1 = row.get("D1", "0").strip()
-                d2 = row.get("D2", "0").strip()
-                d3 = row.get("D3", "0").strip()
-                d4 = row.get("D4", "0").strip()
+                if not date:
+                    continue
 
                 key = f"drought-{date}"
-                if not date or self._already_seen(key):
+                if self._already_seen(key):
                     continue
+
+                # Convert raw area (sq mi with commas) to percentage of CONUS
+                def to_pct(val):
+                    try:
+                        return round(float(val.replace(",", "")) / CONUS_AREA * 100, 1)
+                    except (ValueError, TypeError, AttributeError):
+                        return 0.0
+
+                d0 = to_pct(row.get("D0", "0"))
+                d1 = to_pct(row.get("D1", "0"))
+                d2 = to_pct(row.get("D2", "0"))
+                d3 = to_pct(row.get("D3", "0"))
+                d4 = to_pct(row.get("D4", "0"))
 
                 await self.emit({
                     "text": f"US Drought: D0={d0}% D1={d1}% D2={d2}% D3={d3}% D4={d4}% ({date})",
@@ -5941,6 +5966,10 @@ class NyFedRatesSource(BaseSource):
                         rate_val = r.get("percentRate", r.get("rate", ""))
                         eff_date = r.get("effectiveDate", "")
                         volume = r.get("volumeInBillions", "")
+
+                        # Skip entries with empty/null rate values (e.g., SOFRAI)
+                        if not rate_val or rate_val in ("", "null", None):
+                            continue
 
                         key = f"nyfed-{rate_type}-{eff_date}-{rate_val}"
                         if not rate_type or self._already_seen(key):

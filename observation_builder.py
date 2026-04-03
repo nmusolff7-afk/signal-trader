@@ -146,6 +146,42 @@ class ObservationBuilder:
 
     # ── Ingest a raw event ────────────────────────────────────────────────────
 
+    @staticmethod
+    def _minutes_to_next_scheduled(now, event_type: str) -> float:
+        """Compute minutes until next known scheduled macro release."""
+        dow = now.weekday()  # 0=Mon
+        hour_utc = now.hour + now.minute / 60.0
+
+        if event_type == "EIA":
+            # EIA petroleum: Wednesday 14:30 UTC (10:30 ET)
+            days_until_wed = (2 - dow) % 7
+            if days_until_wed == 0 and hour_utc > 14.5:
+                days_until_wed = 7
+            target_hour = 14.5
+            mins = days_until_wed * 1440 + (target_hour - hour_utc) * 60
+            return max(mins, 0) / 1440.0  # normalized to days
+
+        elif event_type == "NFP":
+            # NFP: first Friday of month, 12:30 UTC (8:30 ET)
+            # Approximate: next Friday
+            days_until_fri = (4 - dow) % 7
+            if days_until_fri == 0 and hour_utc > 12.5:
+                days_until_fri = 7
+            target_hour = 12.5
+            mins = days_until_fri * 1440 + (target_hour - hour_utc) * 60
+            return max(mins, 0) / 1440.0
+
+        elif event_type == "FOMC":
+            # FOMC: ~every 6 weeks, announce 18:00 UTC (2:00 PM ET)
+            # Simplified: always return days until next Wednesday 18:00
+            days_until_wed = (2 - dow) % 7
+            if days_until_wed == 0 and hour_utc > 18.0:
+                days_until_wed = 7
+            mins = days_until_wed * 1440 + (18.0 - hour_utc) * 60
+            return max(mins, 0) / 1440.0
+
+        return 0.0
+
     def ingest(self, event: dict) -> None:
         """
         Called for every raw event as it arrives.
@@ -284,6 +320,9 @@ class ObservationBuilder:
             "dow_cos": math.cos(2 * math.pi * dow / 7),
             "is_us_market_hours": 1.0 if 13.5 <= hour <= 20.0 and dow < 5 else 0.0,  # UTC
             "minute_of_day": now.hour * 60 + now.minute,
+            "mins_to_eia": self._minutes_to_next_scheduled(now, "EIA"),
+            "mins_to_fomc": self._minutes_to_next_scheduled(now, "FOMC"),
+            "mins_to_nfp": self._minutes_to_next_scheduled(now, "NFP"),
         }
 
         # ── Price features (normalized) ───────────────────────────────────
@@ -411,9 +450,10 @@ class ObservationBuilder:
         """Returns ordered list of feature names matching state_vector indices."""
         names = []
 
-        # Temporal (6)
+        # Temporal (9)
         names += ["hour_sin", "hour_cos", "dow_sin", "dow_cos",
-                   "is_us_market_hours", "minute_of_day"]
+                   "is_us_market_hours", "minute_of_day",
+                   "mins_to_eia", "mins_to_fomc", "mins_to_nfp"]
 
         # Prices (per asset: z_price, change_frac, ret_1m, ret_5m, ret_15m)
         for asset in PRICE_ASSETS:
