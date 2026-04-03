@@ -41,21 +41,36 @@ class BaseSource(ABC):
     name: str = "Unknown"
     interval_seconds: float = 60.0   # How often to check for new data
 
+    # How long (seconds) before a seen key expires and can re-emit.
+    # Override per-source for different dedup windows.
+    seen_ttl: float = 300.0   # 5 min default — sources re-emit after this
+
     def __init__(self, queue: asyncio.Queue):
         self.queue = queue
-        self._seen: set[str] = set()   # Deduplicate items we've already sent
+        self._seen: dict[str, float] = {}   # key -> timestamp when first seen
 
     def _now(self) -> str:
         return datetime.datetime.utcnow().isoformat()
 
     def _already_seen(self, key: str) -> bool:
-        """Return True if we've sent this item before. Prevents duplicate signals."""
-        if key in self._seen:
-            return True
-        self._seen.add(key)
-        # Trim to prevent unbounded memory growth (keep last 500 keys)
+        """Return True if we've sent this item recently (within seen_ttl)."""
+        import time
+        now = time.time()
+
+        # Expire old entries
         if len(self._seen) > 500:
-            self._seen.pop()
+            cutoff = now - self.seen_ttl
+            self._seen = {k: v for k, v in self._seen.items() if v > cutoff}
+
+        if key in self._seen:
+            # Check if it's expired
+            if now - self._seen[key] < self.seen_ttl:
+                return True
+            # Expired — allow re-emit
+            self._seen[key] = now
+            return False
+
+        self._seen[key] = now
         return False
 
     async def emit(self, item: dict) -> None:
@@ -629,6 +644,7 @@ class KrakenFundingRateSource(BaseSource):
     """
     name = "Kraken Funding"
     interval_seconds = 5.0
+    seen_ttl = 30
 
     # Kraken perp symbol → human label
     SYMBOLS = {
@@ -696,6 +712,7 @@ class OkxFundingRateSource(BaseSource):
     """OKX perpetuals funding rates"""
     name = "OKX Funding"
     interval_seconds = 5.0
+    seen_ttl = 30
     
     def __init__(self, queue: asyncio.Queue):
         super().__init__(queue)
@@ -743,6 +760,7 @@ class BlockchainComSource(BaseSource):
     """Monitor large BTC transfers in real-time"""
     name = "Blockchain.com"
     interval_seconds = 10.0
+    seen_ttl = 60
     
     async def poll(self) -> None:
         try:
@@ -1390,12 +1408,13 @@ class EdgarFilingSource(BaseSource):
 
 class KrakenPriceSource(BaseSource):
     """
-    Polls Kraken spot prices for BTC and ETH every 10 seconds.
-    Emits price + 24h change so the dashboard has real-time data.
+    Polls Kraken spot prices for BTC and ETH every 5 seconds.
+    Always emits — this is the system heartbeat and RL price feed.
     FREE. No API key required.
     """
     name = "Kraken Price"
-    interval_seconds = 10.0
+    interval_seconds = 5.0
+    seen_ttl = 0  # never dedup — always emit
 
     TICKER_URL = "https://api.kraken.com/0/public/Ticker"
     PAIRS = {
@@ -1434,10 +1453,6 @@ class KrakenPriceSource(BaseSource):
                         low = float(ticker["l"][1])    # 24h low
                         volume = float(ticker["v"][1]) # 24h volume
 
-                        # Only emit if price actually changed
-                        last = self._last_prices.get(label)
-                        if last and abs(price - last) < 0.01:
-                            continue
                         self._last_prices[label] = price
 
                         change_pct = ((price - open_price) / open_price) * 100 if open_price else 0
@@ -1971,7 +1986,8 @@ class PolymarketSource(BaseSource):
     FREE. No API key required for reads.
     """
     name = "Polymarket"
-    interval_seconds = 30.0  # every 1 min
+    interval_seconds = 30.0
+    seen_ttl = 60  # every 1 min
 
     API_URL = "https://gamma-api.polymarket.com/markets"
 
@@ -2501,6 +2517,7 @@ class DydxSource(BaseSource):
     """dYdX v4 perpetual markets — funding, OI, volume. No auth."""
     name = "dYdX"
     interval_seconds = 30.0
+    seen_ttl = 30
 
     MARKETS_URL = "https://indexer.dydx.trade/v4/perpetualMarkets"
 
@@ -2564,6 +2581,7 @@ class MempoolSource(BaseSource):
     """Bitcoin mempool fees + difficulty adjustment. No auth."""
     name = "Mempool"
     interval_seconds = 15.0
+    seen_ttl = 15
 
     FEES_URL = "https://mempool.space/api/v1/fees/recommended"
     DIFF_URL = "https://mempool.space/api/v1/difficulty-adjustment"
@@ -3678,6 +3696,7 @@ class HyperliquidSource(BaseSource):
     """Hyperliquid DEX — perpetual funding/OI/volume. No auth."""
     name = "Hyperliquid"
     interval_seconds = 30.0
+    seen_ttl = 30
 
     API_URL = "https://api.hyperliquid.xyz/info"
     TRACKED = {"BTC", "ETH", "SOL"}
@@ -5016,6 +5035,7 @@ class CnnFearGreedSource(BaseSource):
     """CNN Fear & Greed — 7-component equity sentiment (0-100). No auth."""
     name = "CNN Fear&Greed"
     interval_seconds = 300.0
+    seen_ttl = 300
 
     async def poll(self) -> None:
         try:
@@ -5055,6 +5075,7 @@ class StockTwitsSource(BaseSource):
     """StockTwits — pre-labeled bull/bear messages per ticker. No auth."""
     name = "StockTwits"
     interval_seconds = 60.0
+    seen_ttl = 120
 
     API_URL = "https://api.stocktwits.com/api/2/streams/symbol"
     TICKERS = ["SPY", "QQQ", "AAPL", "TSLA", "NVDA", "BTC.X", "ETH.X"]
@@ -5106,6 +5127,7 @@ class FourChanBizSource(BaseSource):
     """4chan /biz/ — anonymous crypto/retail sentiment. No auth."""
     name = "4chan /biz/"
     interval_seconds = 120.0
+    seen_ttl = 120
 
     CATALOG_URL = "https://a.4cdn.org/biz/catalog.json"
 
@@ -5259,6 +5281,7 @@ class KalshiSource(BaseSource):
     """Kalshi — real-money regulated event contracts (CPI, GDP, Fed, weather). No auth."""
     name = "Kalshi"
     interval_seconds = 60.0
+    seen_ttl = 60
 
     API_URL = "https://api.elections.kalshi.com/trade-api/v2/markets"
 
@@ -5423,6 +5446,7 @@ class ManifoldSource(BaseSource):
     """Manifold Markets — prediction markets on breaking events. No auth."""
     name = "Manifold"
     interval_seconds = 60.0
+    seen_ttl = 60
 
     API_URL = "https://api.manifold.markets/v0/markets"
 
@@ -5476,6 +5500,7 @@ class FinnhubSource(BaseSource):
     """Finnhub — news sentiment + social sentiment + insider MSPR. Free key."""
     name = "Finnhub"
     interval_seconds = 120.0
+    seen_ttl = 120
 
     BASE_URL = "https://finnhub.io/api/v1"
     TICKERS = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN"]

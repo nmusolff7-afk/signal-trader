@@ -191,77 +191,7 @@ async function updateStatus(){
   }catch(e){console.error(e)}
 }
 
-async function updateEvents(){
-  try{
-    const url=latestId>0?`${API}/events?limit=50&since_id=${latestId}`:`${API}/events?limit=300`;
-    const r=await fetch(url);
-    const d=await r.json();
-
-    if(!d.events||!d.events.length)return;
-
-    // Update latest ID
-    if(d.latest_id)latestId=d.latest_id;
-
-    // Prepend new events
-    let hasNew=false;
-    for(const e of d.events){
-      if(!knownIds.has(e.id)){
-        knownIds.add(e.id);
-        e._new=true;
-        allEvents.unshift(e);
-        hasNew=true;
-      }
-    }
-
-    if(!hasNew)return;
-
-    // Trim old events
-    if(allEvents.length>MAX_EVENTS)allEvents.length=MAX_EVENTS;
-
-    // Split prices vs signals
-    const prices=[];
-    const signals=[];
-    for(const e of allEvents){
-      if(e.source==='Kraken Price')prices.push(e);
-      else signals.push(e);
-    }
-
-    document.getElementById('fc').textContent=`${signals.length} signals`;
-
-    // Group signals by category
-    const grouped={};
-    for(const cat of CAT_ORDER)grouped[cat]=[];
-    for(const e of signals){
-      const cat=CAT_MAP[e.source]||'infra';
-      if(!grouped[cat])grouped[cat]=[];
-      grouped[cat].push(e);
-    }
-
-    // Render categorized feed
-    let html='';
-    for(const cat of CAT_ORDER){
-      const items=grouped[cat];
-      if(!items||!items.length)continue;
-      const info=CAT_LABELS[cat];
-      html+=`<div class="cat-hdr ${info.cls}">${info.label} (${items.length})</div>`;
-      for(const e of items.slice(0,80)){
-        const time=new Date(e.ts).toLocaleTimeString();
-        const hasEv=e.event_id&&e.event_id!=='NO_EVENT';
-        const trd=e.tradeable;
-        const isNew=e._new;
-        if(isNew)e._new=false;
-        let cls=trd?'c1':(hasEv?'c0':'');
-        if(isNew)cls+=' new';
-        const txt=(e.raw_text||'').substring(0,180);
-        html+=`<div class="ev ${cls}"><div class="m"><span class="t">${time}</span><span class="s">${e.source}</span>${hasEv?`<span class="e">${e.event_id}</span><span class="cf">${(e.confidence||0).toFixed(2)}</span>`:''}</div><div class="tx">${txt}</div></div>`;
-      }
-    }
-    document.getElementById('fl').innerHTML=html;
-
-    // Right column: prices + sentiment gauges
-    renderRight(prices);
-  }catch(e){console.error(e)}
-}
+// updateEvents replaced by SSE + renderFeed above
 
 function renderRight(prices){
   // Latest prices
@@ -329,10 +259,105 @@ function renderRight(prices){
 }
 
 // FAST polling: 2s events, 8s status
-setInterval(updateEvents,2000);
-setInterval(updateStatus,8000);
+// ── SSE: instant push for new events ──
+let sseConnected = false;
+function connectSSE() {
+  const es = new EventSource(`${API}/stream`);
+  es.onopen = () => {
+    sseConnected = true;
+    document.getElementById('h-lat').textContent = 'SSE connected';
+    document.getElementById('h-lat').style.color = 'var(--green)';
+  };
+  es.onmessage = (msg) => {
+    try {
+      const e = JSON.parse(msg.data);
+      if (!knownIds.has(e.id)) {
+        knownIds.add(e.id);
+        e._new = true;
+        allEvents.unshift(e);
+        if (allEvents.length > MAX_EVENTS) allEvents.length = MAX_EVENTS;
+        renderFeed();
+      }
+    } catch(err) { console.error('SSE parse:', err); }
+  };
+  es.onerror = () => {
+    sseConnected = false;
+    document.getElementById('h-lat').textContent = 'reconnecting...';
+    document.getElementById('h-lat').style.color = 'var(--red)';
+    es.close();
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+// Separate render from data fetch for SSE
+function renderFeed() {
+  const prices = [];
+  const signals = [];
+  for (const e of allEvents) {
+    if (e.source === 'Kraken Price') prices.push(e);
+    else signals.push(e);
+  }
+  document.getElementById('fc').textContent = `${signals.length} signals`;
+
+  const grouped = {};
+  for (const cat of CAT_ORDER) grouped[cat] = [];
+  for (const e of signals) {
+    const cat = CAT_MAP[e.source] || 'infra';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(e);
+  }
+
+  let html = '';
+  for (const cat of CAT_ORDER) {
+    const items = grouped[cat];
+    if (!items || !items.length) continue;
+    const info = CAT_LABELS[cat];
+    html += `<div class="cat-hdr ${info.cls}">${info.label} (${items.length})</div>`;
+    for (const e of items.slice(0, 80)) {
+      const time = new Date(e.ts).toLocaleTimeString();
+      const hasEv = e.event_id && e.event_id !== 'NO_EVENT';
+      const trd = e.tradeable;
+      const isNew = e._new;
+      if (isNew) e._new = false;
+      let cls = trd ? 'c1' : (hasEv ? 'c0' : '');
+      if (isNew) cls += ' new';
+      const txt = (e.raw_text || '').substring(0, 180);
+      html += `<div class="ev ${cls}"><div class="m"><span class="t">${time}</span><span class="s">${e.source}</span>${hasEv ? `<span class="e">${e.event_id}</span><span class="cf">${(e.confidence || 0).toFixed(2)}</span>` : ''}</div><div class="tx">${txt}</div></div>`;
+    }
+  }
+  document.getElementById('fl').innerHTML = html;
+  renderRight(prices);
+}
+
+// Fallback: poll events if SSE not available
+async function pollEvents() {
+  if (sseConnected) return; // SSE is handling it
+  try {
+    const url = latestId > 0 ? `${API}/events?limit=50&since_id=${latestId}` : `${API}/events?limit=300`;
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!d.events || !d.events.length) return;
+    if (d.latest_id) latestId = d.latest_id;
+    let hasNew = false;
+    for (const e of d.events) {
+      if (!knownIds.has(e.id)) {
+        knownIds.add(e.id);
+        e._new = true;
+        allEvents.unshift(e);
+        hasNew = true;
+      }
+    }
+    if (!hasNew) return;
+    if (allEvents.length > MAX_EVENTS) allEvents.length = MAX_EVENTS;
+    renderFeed();
+  } catch(e) { console.error(e); }
+}
+
+// Initial load + start SSE
 updateStatus();
-updateEvents();
+pollEvents().then(() => connectSSE());
+setInterval(updateStatus, 8000);
+setInterval(pollEvents, 3000); // fallback if SSE drops
 </script>
 </body>
 </html>

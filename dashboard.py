@@ -28,7 +28,7 @@ except ImportError:
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="APEX Signal Trader Dashboard")
@@ -242,6 +242,50 @@ def get_observation_schema():
         return {"schema": schema, "vector_length": len(schema)}
     except Exception as e:
         return {"schema": [], "error": str(e)}
+
+
+@app.get("/api/stream")
+async def event_stream():
+    """Server-Sent Events stream — pushes new events instantly."""
+    import asyncio
+    import time
+
+    async def generate():
+        last_id = 0
+        # Get initial latest ID
+        conn = get_db()
+        if conn:
+            try:
+                row = conn.execute("SELECT MAX(id) FROM raw_events").fetchone()
+                last_id = row[0] or 0
+            finally:
+                conn.close()
+
+        while True:
+            await asyncio.sleep(1)  # check every 1 second
+            conn = get_db()
+            if not conn:
+                continue
+            try:
+                rows = conn.execute("""
+                    SELECT id, ts, source, raw_text, event_id, confidence, tradeable
+                    FROM raw_events WHERE id > ? ORDER BY id ASC LIMIT 50
+                """, (last_id,)).fetchall()
+
+                for r in rows:
+                    event_data = json.dumps(dict(r))
+                    yield f"data: {event_data}\n\n"
+                    last_id = r["id"]
+            except Exception:
+                pass
+            finally:
+                conn.close()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/trades")
