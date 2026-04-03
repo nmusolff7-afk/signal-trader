@@ -127,67 +127,55 @@ async def consumer_loop(queue: asyncio.Queue, classifier) -> None:
     """
     Reads items off the queue forever.
     Classifies each item and dispatches tradeable ones.
-
-    PERFORMANCE: DB writes and classification run in executor threads
-    so the queue drains as fast as possible. This is critical — with
-    100 sources emitting, the consumer must not block.
+    Simple synchronous processing — reliable and fast enough.
     """
     log.info("Consumer loop started")
-    loop = asyncio.get_event_loop()
+    while True:
+        item = await queue.get()
 
-    # Reusable DB connection (WAL mode allows concurrent reads/writes)
-    _conn = db.get_connection()
-
-    def _process_item(item):
-        """Run in thread pool — DB write + classify + update."""
         source = item.get("source", "unknown")
         text = item.get("text", "")
         ts = item.get("ts", "")
         extra = item.get("extra_json")
 
-        # 1. Log raw event to DB
-        cur = _conn.execute(
-            "INSERT INTO raw_events (ts, source, raw_text, extra_json) VALUES (?, ?, ?, ?)",
-            (ts, source, text, extra)
-        )
-        raw_id = cur.lastrowid
-        _conn.commit()
+        # 1. Log raw event
+        try:
+            raw_id = db.log_raw_event(
+                source=source, ts=ts, raw_text=text, extra_json=extra
+            )
+        except Exception as exc:
+            log.warning("DB write error: %s", exc)
+            queue.task_done()
+            continue
 
         # 2. Classify
         try:
             result = classifier.classify(item)
         except Exception as exc:
             log.warning("Classifier error on %s: %s", source, exc)
-            return raw_id, None
-
-        # 3. Update classification result
-        if result.event_id != "NO_EVENT":
-            _conn.execute(
-                "UPDATE raw_events SET event_id=?, confidence=?, tradeable=? WHERE id=?",
-                (result.event_id, result.confidence, int(result.is_tradeable()), raw_id)
-            )
-            _conn.commit()
-
-        return raw_id, result
-
-    while True:
-        item = await queue.get()
-
-        # Run DB + classification in thread pool — non-blocking
-        try:
-            raw_id, result = await loop.run_in_executor(None, _process_item, item)
-        except Exception as exc:
-            log.warning("Consumer error: %s", exc)
             queue.task_done()
             continue
 
-        # Feed to observation builder (fast, in-memory)
-        if obs_builder is not None and result is not None:
+        # 3. Update classification
+        if result.event_id != "NO_EVENT":
+            try:
+                conn = db.get_connection()
+                conn.execute(
+                    "UPDATE raw_events SET event_id=?, confidence=?, tradeable=? WHERE id=?",
+                    (result.event_id, result.confidence, int(result.is_tradeable()), raw_id)
+                )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
+        # 4. Feed to observation builder
+        if obs_builder is not None:
             enriched = dict(item)
             enriched["id"] = raw_id
             enriched["event_id"] = result.event_id
             enriched["confidence"] = result.confidence
-            enriched["raw_text"] = item.get("text", "")
+            enriched["raw_text"] = text
             obs_builder.ingest(enriched)
 
         # Dispatch if tradeable
