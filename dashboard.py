@@ -192,6 +192,58 @@ def get_events(limit: int = 100, since_id: int = 0):
         conn.close()
 
 
+@app.get("/api/observations")
+def get_observations(limit: int = 100):
+    """Last N observation ticks (RL state vectors) from the database."""
+    conn = get_db()
+    if not conn:
+        return {"observations": [], "schema": []}
+    try:
+        rows = conn.execute("""
+            SELECT id, ts, tick_id, state_vector, event_flags, event_confs,
+                   prices_json, macro_json, temporal_json, portfolio_json,
+                   raw_event_count, raw_event_ids
+            FROM observations ORDER BY id DESC LIMIT ?
+        """, (limit,)).fetchall()
+
+        observations = []
+        for r in rows:
+            observations.append({
+                "id": r["id"],
+                "ts": r["ts"],
+                "tick_id": r["tick_id"],
+                "state_vector": json.loads(r["state_vector"]) if r["state_vector"] else [],
+                "event_flags": json.loads(r["event_flags"]) if r["event_flags"] else [],
+                "prices": json.loads(r["prices_json"]) if r["prices_json"] else {},
+                "macro": json.loads(r["macro_json"]) if r["macro_json"] else {},
+                "temporal": json.loads(r["temporal_json"]) if r["temporal_json"] else {},
+                "portfolio": json.loads(r["portfolio_json"]) if r["portfolio_json"] else {},
+                "raw_event_count": r["raw_event_count"],
+            })
+
+        # Include schema so the RL env knows what each index means
+        try:
+            from observation_builder import ObservationBuilder
+            schema = ObservationBuilder.state_vector_schema()
+        except Exception:
+            schema = []
+
+        return {"observations": observations, "schema": schema, "vector_length": len(schema)}
+    finally:
+        conn.close()
+
+
+@app.get("/api/observations/schema")
+def get_observation_schema():
+    """Returns the state vector feature names in order."""
+    try:
+        from observation_builder import ObservationBuilder
+        schema = ObservationBuilder.state_vector_schema()
+        return {"schema": schema, "vector_length": len(schema)}
+    except Exception as e:
+        return {"schema": [], "error": str(e)}
+
+
 @app.get("/api/trades")
 def get_trades(limit: int = 100):
     """Last N trade decisions from the database."""

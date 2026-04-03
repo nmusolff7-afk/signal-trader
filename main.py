@@ -161,7 +161,16 @@ async def consumer_loop(queue: asyncio.Queue, classifier) -> None:
             conn.commit()
             conn.close()
 
-        # 4. Dispatch if tradeable
+        # 4. Feed to observation builder for RL state vector assembly
+        if obs_builder is not None:
+            enriched = dict(item)
+            enriched["id"] = raw_id
+            enriched["event_id"] = result.event_id
+            enriched["confidence"] = result.confidence
+            enriched["raw_text"] = text
+            obs_builder.ingest(enriched)
+
+        # 5. Dispatch if tradeable
         if result.is_tradeable():
             try:
                 dispatch(result, raw_id)
@@ -174,7 +183,28 @@ async def consumer_loop(queue: asyncio.Queue, classifier) -> None:
         queue.task_done()
 
 
+# ── Global observation builder (shared between consumer and tick loop) ────────
+obs_builder = None
+
+
+async def observation_tick_loop():
+    """Fires every TICK_INTERVAL seconds to build and save an observation tick."""
+    from observation_builder import TICK_INTERVAL
+    global obs_builder
+    while True:
+        await asyncio.sleep(TICK_INTERVAL)
+        if obs_builder is not None:
+            try:
+                tick = obs_builder.build_tick()
+                obs_builder.save_tick(tick)
+                log.info("[Observation] Tick %d: %d events, vector len %d",
+                         tick.tick_id, tick.raw_event_count, len(tick.state_vector))
+            except Exception as e:
+                log.warning("[Observation] Tick error: %s", e)
+
+
 async def main() -> None:
+    global obs_builder
     log.info("APEX Signal Trader — Phase 0 starting")
 
     # 1. Init DB
@@ -234,14 +264,29 @@ async def main() -> None:
     log.info("Started %d source tasks: %s",
              len(source_tasks), [s.name for s in sources])
 
-    # 6. Start consumer
+    # 6. Start observation builder (RL state vector assembly)
+    try:
+        from observation_builder import ObservationBuilder
+        obs_builder = ObservationBuilder()
+        obs_tick_task = asyncio.create_task(
+            observation_tick_loop(), name="obs_tick"
+        )
+        log.info("Observation builder started (60s ticks)")
+    except Exception as e:
+        obs_tick_task = None
+        log.warning("Observation builder failed to start: %s", e)
+
+    # 7. Start consumer
     consumer_task = asyncio.create_task(
         consumer_loop(queue, classifier), name="consumer"
     )
 
-    # 7. Run until interrupted (Ctrl+C)
+    # 8. Run until interrupted (Ctrl+C)
     try:
-        await asyncio.gather(consumer_task, *source_tasks)
+        all_tasks = [consumer_task, *source_tasks]
+        if obs_tick_task:
+            all_tasks.append(obs_tick_task)
+        await asyncio.gather(*all_tasks)
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.info("Shutting down...")
         for task in [consumer_task, *source_tasks]:
