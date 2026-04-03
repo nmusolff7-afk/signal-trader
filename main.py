@@ -137,36 +137,61 @@ async def consumer_loop(queue: asyncio.Queue, classifier) -> None:
     log.info("Consumer loop started")
     conn = _get_db()
 
+    import re as _re
+    import datetime as _dt
+
     while True:
         item = await queue.get()
 
         source = item.get("source", "unknown")
         text = item.get("text", "")
         ts = item.get("ts", "")
+        extra = item.get("extra_json")
 
-        # ── Freshness filter: reject stale data ──────────────────────────
-        # If the event text contains a date/year that's >6 months old, skip it.
-        # This catches RSS archive re-ingestion (BoE 2025 speeches, CBOE 2019 data, etc.)
-        import re as _re
-        stale = False
+        # ── Signal age computation ──────────────────────────────────────
+        # Compute how old this signal is (received_at - published_at)
+        now = _dt.datetime.utcnow()
+        signal_age = 0.0
+        is_stale = False
+
+        # Try to extract publication timestamp from the item
+        pub_ts = item.get("published_at") or item.get("pub_date")
+        if pub_ts:
+            try:
+                if isinstance(pub_ts, str):
+                    pub_dt = _dt.datetime.fromisoformat(pub_ts.replace("Z", "+00:00").replace("+00:00", ""))
+                elif isinstance(pub_ts, (int, float)):
+                    pub_dt = _dt.datetime.utcfromtimestamp(pub_ts)
+                else:
+                    pub_dt = now
+                signal_age = (now - pub_dt).total_seconds()
+            except (ValueError, TypeError, OverflowError):
+                signal_age = 0.0
+
+        # Staleness thresholds per source type (seconds)
+        STALENESS = {
+            "Fed RSS": 300, "White House": 600, "Al Jazeera": 1800,
+            "BBC News": 1800, "FDA MedWatch": 86400, "EIA Petroleum": 3600,
+            "CFTC COT": 604800, "Congress": 604800, "USASpending": 2592000,
+            "SEC Press Releases": 3600, "FERC Energy": 3600,
+        }
+        max_age = STALENESS.get(source, 86400)  # default 24h
+        if signal_age > max_age:
+            is_stale = True
+
+        # Text-based staleness check — reject old year references
         year_matches = _re.findall(r'\b(20\d{2})\b', text)
         if year_matches:
-            import datetime as _dt
-            current_year = _dt.datetime.utcnow().year
-            current_month = _dt.datetime.utcnow().month
+            current_year = now.year
             for y in year_matches:
                 yr = int(y)
-                if yr < current_year - 1:  # more than 1 year old
-                    stale = True
-                    break
-                if yr == current_year - 1 and current_month > 6:  # >6 months ago
-                    stale = True
+                if yr < current_year - 1:
+                    is_stale = True
                     break
 
-        if stale:
+        if is_stale:
             queue.task_done()
             continue
-        extra = item.get("extra_json")
 
         # 1. Write to DB (single persistent connection)
         try:
@@ -204,7 +229,7 @@ async def consumer_loop(queue: asyncio.Queue, classifier) -> None:
             except Exception:
                 pass
 
-        # 4. Broadcast to SSE clients IMMEDIATELY (no DB polling needed)
+        # 4. Broadcast to SSE clients IMMEDIATELY
         broadcast_event({
             "id": raw_id,
             "ts": ts,
@@ -213,6 +238,7 @@ async def consumer_loop(queue: asyncio.Queue, classifier) -> None:
             "event_id": event_id if event_id != "NO_EVENT" else None,
             "confidence": confidence if event_id != "NO_EVENT" else None,
             "tradeable": tradeable,
+            "signal_age_seconds": round(signal_age, 1),
         })
 
         # 5. Feed to observation builder

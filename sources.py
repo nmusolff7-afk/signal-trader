@@ -36,31 +36,22 @@ log = logging.getLogger(__name__)
 class BaseSource(ABC):
     """
     Abstract base for every data source.
-    Subclasses implement poll() and set name + interval_seconds.
 
-    DEDUP RULES (fixing the core data quality problem):
-    - _already_seen(key) returns True if the EXACT key was seen before.
-    - Keys NEVER expire. Same data = same key = never re-emitted.
-    - This is correct: the RL model needs ONE signal per value change,
-      not 80 copies of "funding rate = -50.8%" every minute.
-    - For RSS feeds: key = article URL/ID (naturally unique per item)
-    - For numeric data: key = rounded value (emits on meaningful change)
-    - Price feed (KrakenPrice): uses special logic — emits on price change
+    DEDUP: Uses SQLite-persisted SeenStore that SURVIVES RESTARTS.
+    No more archive re-ingestion after Railway redeploys.
+
+    DELTA: Numeric sources use DeltaTracker — only emit on value change.
+    No more 80 identical funding rate rows per minute.
     """
     name: str = "Unknown"
     interval_seconds: float = 60.0
-
-    # REMOVED: always_emit and seen_ttl — these caused the noise flooding.
-    # Dedup is now permanent per key. Sources that need to re-emit
-    # should construct keys that include the changing value.
 
     _shared_session: 'aiohttp.ClientSession | None' = None
 
     def __init__(self, queue: asyncio.Queue):
         self.queue = queue
-        self._seen: set[str] = set()
         self._poll_count = 0
-        self._newest_pub_ts: float = 0  # track newest publication timestamp per source
+        self._newest_pub_ts: float = 0
 
     @classmethod
     def set_shared_session(cls, session: 'aiohttp.ClientSession') -> None:
@@ -76,24 +67,25 @@ class BaseSource(ABC):
 
     def _already_seen(self, key: str) -> bool:
         """
-        Permanent dedup. Once a key is seen, it's never emitted again.
-        This is correct for: RSS articles, filing IDs, unique events.
-
-        For numeric data that changes: include the VALUE in the key
-        so a new value = new key = new emission. Example:
-          key = f"kraken-BTC-{price:.0f}"  → emits on $1 change
-          key = f"funding-BTC-{rate:.4f}"  → emits on 0.01% change
+        Persistent dedup backed by SQLite. Survives restarts.
+        Once a key is seen, it's NEVER emitted again (until DB cleanup).
         """
-        if key in self._seen:
-            return True
-        self._seen.add(key)
-        # Trim to prevent unbounded growth — keep last 2000
-        if len(self._seen) > 2000:
-            # Remove oldest (sets are unordered, but this prevents OOM)
-            excess = len(self._seen) - 1500
-            for _ in range(excess):
-                self._seen.pop()
-        return False
+        from seen_store import SeenStore
+        store = SeenStore.get_instance()
+        return not store.is_new(self.name, key)
+
+    def _value_changed(self, key: str, value: float, threshold_pct: float = 0.001) -> bool:
+        """
+        Delta tracking for numeric sources. Only returns True if the
+        value changed by more than threshold_pct since last emission.
+        First observation always returns True.
+
+        Use this instead of _already_seen() for continuous numeric data:
+          funding rates, prices, water levels, delay counts, etc.
+        """
+        from seen_store import DeltaTracker
+        tracker = DeltaTracker.get_instance()
+        return tracker.is_changed(f"{self.name}:{key}", value, threshold_pct)
 
     def _is_fresh_rss(self, entry) -> bool:
         """Check if an RSS entry is newer than the last item we processed.
@@ -732,9 +724,10 @@ class KrakenFundingRateSource(BaseSource):
                             continue
 
                         funding_rate = float(ticker.get("fundingRate", 0))
-                        rate_key = f"{symbol}_{funding_rate:.8f}"
-                        if self._already_seen(rate_key):
-                            continue
+
+                        # Delta tracker: only emit if funding rate actually changed
+                        if not self._value_changed(f"funding-{symbol}", funding_rate, 0.05):
+                            continue  # <5% relative change — skip
 
                         if funding_rate > 0.0005:
                             direction = "extreme_positive"
@@ -794,9 +787,9 @@ class OkxFundingRateSource(BaseSource):
                         
                         latest = data["data"][0]
                         funding_rate = float(latest.get("fundingRate", 0))
-                        
-                        rate_key = f"{symbol}_{funding_rate:.6f}"
-                        if self._already_seen(rate_key):
+
+                        # Delta tracker: only emit on meaningful change
+                        if not self._value_changed(f"okx-funding-{symbol}", funding_rate, 0.05):
                             continue
                         
                         await self.emit({
@@ -1773,7 +1766,6 @@ class CftcCotSource(BaseSource):
                 for record in data:
                     market = record.get("market_and_exchange_names", "")
                     report_date = record.get("report_date_as_yyyy_mm_dd", "")
-                    # Clean market name — CFTC adds exchange suffix
                     market_clean = market.split(" - ")[0].strip()
 
                     key = f"cot-{market_clean}-{report_date}"
@@ -1786,16 +1778,24 @@ class CftcCotSource(BaseSource):
                             asset = label
                             break
 
-                    # Managed money net position
-                    mm_long = int(record.get("m_money_positions_long_all", 0) or 0)
-                    mm_short = int(record.get("m_money_positions_short_all", 0) or 0)
-                    mm_net = mm_long - mm_short
+                    if asset is None:
+                        continue  # skip instruments we don't trade
 
-                    # Commercial hedgers
-                    comm_long = int(record.get("prod_merc_positions_long_all", 0) or 0)
-                    comm_short = int(record.get("prod_merc_positions_short_all", 0) or 0)
+                    # Legacy COT uses noncomm (speculators) and comm (hedgers)
+                    # NOT m_money (that's the disaggregated report)
+                    spec_long = int(record.get("noncomm_positions_long_all", 0) or 0)
+                    spec_short = int(record.get("noncomm_positions_short_all", 0) or 0)
+                    spec_net = spec_long - spec_short
+
+                    comm_long = int(record.get("comm_positions_long_all", 0) or 0)
+                    comm_short = int(record.get("comm_positions_short_all", 0) or 0)
                     comm_net = comm_long - comm_short
 
+                    # Use delta tracker — only emit on meaningful position change
+                    if not self._value_changed(f"cot-{asset}-spec", spec_net, 0.05):
+                        continue
+
+                    mm_net = spec_net  # rename for downstream compatibility
                     direction = "net-long" if mm_net > 0 else "net-short"
 
                     await self.emit({
